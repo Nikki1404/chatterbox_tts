@@ -1,4 +1,4 @@
-# Chatterbox TTS – Local & EC2 Benchmarking Service
+# Chatterbox TTS 
 
 This project runs **ResembleAI Chatterbox TTS** as a **WebSocket-based service** for benchmarking
 latency, TTFA (time-to-first-audio), and RTF with:
