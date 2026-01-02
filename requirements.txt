@@ -1,0 +1,9 @@
+chatterbox-tts
+torch
+torchaudio
+numpy
+soundfile
+fastapi
+uvicorn
+websockets
+psutil
