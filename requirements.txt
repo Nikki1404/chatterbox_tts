@@ -1,9 +1,10 @@
 chatterbox-tts
+fastapi
+numpy
+psutil
+soundfile
 torch
 torchaudio
-numpy
-soundfile
-fastapi
 uvicorn
 websockets
-psutil
+
