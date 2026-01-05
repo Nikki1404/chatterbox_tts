@@ -1,27 +1,34 @@
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+(client_env) root@EC03-E01-AICOE1:/home/CORP/re_nikitav/cx-speech-voice-cloning/client# vi client.py
+(client_env) root@EC03-E01-AICOE1:/home/CORP/re_nikitav/cx-speech-voice-cloning/client# python3 client.py
+Enable voice cloning? (y/n): n
 
-ENV https_proxy="http://163.116.128.80:8080"
-ENV http_proxy="http://163.116.128.80:8080"
+Mode: BASE TTS
+Short text → single-shot | Long text → sentence chunking
 
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    ffmpeg \
-    libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
+Enter text (end with empty line, or 'exit'):
+Hello! This is a test of the text-to-speech system.
+Today is Monday, January 5th, 2026, and the temperature is 24 degrees Celsius.
+Dr. Smith will arrive at 10:30 a.m. for the meeting in Room B-12.
+Please read the following numbers clearly: 42, 3.1416, and 1,000,000.
+The quick brown fox jumps over the lazy dog.
+Can you hear the difference between a question and a statement?
+Thank you for listening, and have a great day!
 
-RUN ln -s /usr/bin/python3 /usr/bin/python
-
-WORKDIR /app
-
-
-RUN pip install --upgrade pip setuptools wheel
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-EXPOSE 8000
-
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "600"]
+Traceback (most recent call last):
+  File "/home/CORP/re_nikitav/cx-speech-voice-cloning/client/client.py", line 102, in <module>
+    asyncio.run(main())
+  File "/usr/lib/python3.10/asyncio/runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "/usr/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
+    return future.result()
+  File "/home/CORP/re_nikitav/cx-speech-voice-cloning/client/client.py", line 60, in main
+    async with websockets.connect(
+  File "/home/CORP/re_nikitav/cx-speech-voice-cloning/client/client_env/lib/python3.10/site-packages/websockets/asyncio/client.py", line 587, in __aenter__
+    return await self
+  File "/home/CORP/re_nikitav/cx-speech-voice-cloning/client/client_env/lib/python3.10/site-packages/websockets/asyncio/client.py", line 541, in __await_impl__
+    self.connection = await self.create_connection()
+  File "/home/CORP/re_nikitav/cx-speech-voice-cloning/client/client_env/lib/python3.10/site-packages/websockets/asyncio/client.py", line 440, in create_connection
+    transport = await connect_http_proxy(
+  File "/home/CORP/re_nikitav/cx-speech-voice-cloning/client/client_env/lib/python3.10/site-packages/websockets/asyncio/client.py", line 815, in connect_http_proxy
+    await protocol.response
+websockets.exceptions.InvalidProxyStatus: proxy rejected connection: HTTP 400
