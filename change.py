@@ -1,28 +1,25 @@
 FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
-
 RUN apt-get update && apt-get install -y \
-    software-properties-common \
+    wget \
+    bzip2 \
     ffmpeg \
     libsndfile1 \
-    curl \
-    git \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+ENV CONDA_DIR=/opt/conda
+RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-py312_24.1.2-0-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p $CONDA_DIR && \
+    rm /tmp/miniconda.sh
 
-RUN add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get install -y \
-    python3.12 \
-    python3.12-dev \
-    python3.12-venv && \
-    rm -rf /var/lib/apt/lists/*
+ENV PATH=$CONDA_DIR/bin:$PATH
 
+RUN conda create -y -n py312 python=3.12 && \
+    conda clean -afy
 
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
-
-RUN ln -s /usr/bin/python3.12 /usr/bin/python && \
-    ln -s /usr/bin/python3.12 /usr/bin/python3
+ENV CONDA_DEFAULT_ENV=py312
+ENV PATH=$CONDA_DIR/envs/py312/bin:$PATH
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/root/.cache/huggingface
