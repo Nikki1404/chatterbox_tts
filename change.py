@@ -1,102 +1,47 @@
-import asyncio
-import websockets
-import json
-import base64
-import soundfile as sf
-import io
-import os
-import numpy as np
-import uuid
-from datetime import datetime
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
+# -----------------------------
+# System deps
+# -----------------------------
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-SERVER = "ws://127.0.0.1:8000/tts"
-OUT_DIR = "outputs"
-os.makedirs(OUT_DIR, exist_ok=True)
+# -----------------------------
+# Python 3.12 install
+# -----------------------------
+RUN add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y \
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
+    python3.12-distutils && \
+    rm -rf /var/lib/apt/lists/*
 
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 
-def unique_wav_path(out_dir: str) -> str:
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    uid = uuid.uuid4().hex[:6]
-    return os.path.join(out_dir, f"tts_{ts}_{uid}.wav")
+RUN ln -s /usr/bin/python3.12 /usr/bin/python && \
+    ln -s /usr/bin/python3.12 /usr/bin/python3
 
+# -----------------------------
+# Env
+# -----------------------------
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/root/.cache/huggingface
 
-def decode_wav_from_b64(audio_b64: str):
-    audio_bytes = base64.b64decode(audio_b64)
-    buf = io.BytesIO(audio_bytes)
-    wav, sr = sf.read(buf)
-    return wav, sr
+WORKDIR /app
 
+RUN pip install --upgrade pip setuptools wheel
 
-async def main():
-    clone_input = input("Enable voice cloning? (y/n): ").strip().lower()
-    clone_voice = clone_input == "y"
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-    ref_audio = None
-    if clone_voice:
-        ref_audio = input("ref_audio_path: ").strip()
-        if not ref_audio:
-            print("Error: ref_audio_path required")
-            return
+COPY . .
 
-    print("\nMode:", "VOICE CLONING" if clone_voice else "BASE TTS")
-    print("Short text → single-shot | Long text → sentence chunking\n")
+EXPOSE 8000
 
-    while True:
-        print("Enter text (end with empty line, or 'exit'):")
-        lines = []
-        while True:
-            line = input()
-            if not line.strip():
-                break
-            lines.append(line)
-
-        text = " ".join(lines).strip()
-        if text.lower() == "exit":
-            break
-
-        audio_chunks = []
-
-        async with websockets.connect(
-            SERVER,
-            max_size=200_000_000,
-            ping_interval=None,
-            ping_timeout=None,
-        ) as ws:
-
-            await ws.send(json.dumps({
-                "text": text,
-                "clone_voice": clone_voice,
-                "ref_audio_path": ref_audio,
-            }))
-
-            while True:
-                msg = await ws.recv()
-                data = json.loads(msg)
-
-                if data["type"] == "error":
-                    print("Error:", data["error"])
-                    break
-
-                if data["type"] == "single":
-                    wav, sr = decode_wav_from_b64(data["audio_base64"])
-                    out = unique_wav_path(OUT_DIR)
-                    sf.write(out, wav, sr)
-                    print("Saved:", out)
-                    print("Metrics:", data["metrics"])
-                    break
-
-                if data["type"] == "chunk":
-                    wav, sr = decode_wav_from_b64(data["audio_base64"])
-                    audio_chunks.append(wav)
-
-                if data["type"] == "done":
-                    final_wav = np.concatenate(audio_chunks)
-                    out = unique_wav_path(OUT_DIR)
-                    sf.write(out, final_wav, sr)
-                    print("Saved:", out)
-                    print("Metrics:", data["metrics"])
-                    break
-
-
-asyncio.run(main())
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "600"]
