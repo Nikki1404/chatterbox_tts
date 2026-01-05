@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 
 
-SERVER = "ws://localhost:8000/tts"
+SERVER = "ws://127.0.0.1:8000/tts"
 OUT_DIR = "outputs"
 os.makedirs(OUT_DIR, exist_ok=True)
 
