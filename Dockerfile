@@ -1,19 +1,14 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y \
-    git \
-    ffmpeg \
-    libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV HF_HOME=/root/.cache/huggingface
+ENV https_proxy="http://163.116.128.80:8080"
+ENV http_proxy="http://163.116.128.80:8080"
 
 WORKDIR /app
 
+RUN pip install --upgrade pip setuptools wheel
 
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 
