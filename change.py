@@ -12,13 +12,8 @@ from fastapi import FastAPI, WebSocket
 from chatterbox.tts import ChatterboxTTS
 
 
-# -----------------------------
-# Device auto-detection
-# -----------------------------
 if torch.cuda.is_available():
     DEVICE = "cuda"
-elif torch.backends.mps.is_available():
-    DEVICE = "mps"
 else:
     DEVICE = "cpu"
 
@@ -32,14 +27,9 @@ print(f"Loading Chatterbox on device: {DEVICE}")
 model = ChatterboxTTS.from_pretrained(device=DEVICE)
 SR = model.sr
 
-# Warmup (important to stabilize first latency)
 _ = model.generate("Warmup.")
 print("Chatterbox ready. Sample rate:", SR)
 
-
-# -----------------------------
-# Helpers
-# -----------------------------
 def wav_to_b64(wav, sr):
     buf = io.BytesIO()
     sf.write(buf, wav, sr, format="WAV")
@@ -52,9 +42,6 @@ def split_into_sentences(text: str):
     return [s for s in sentences if s]
 
 
-# -----------------------------
-# WebSocket endpoint
-# -----------------------------
 @app.websocket("/tts")
 async def tts(ws: WebSocket):
     await ws.accept()
@@ -90,9 +77,7 @@ async def tts(ws: WebSocket):
 
         t0 = time.perf_counter()
 
-        # -----------------------------
         # SHORT TEXT → single-shot
-        # -----------------------------
         if len(text) < SHORT_TEXT_CHAR_THRESHOLD:
             wav = await asyncio.to_thread(
                 model.generate,
@@ -120,9 +105,7 @@ async def tts(ws: WebSocket):
             })
             return
 
-        # -----------------------------
         # LONG TEXT → sentence chunking
-        # -----------------------------
         sentences = split_into_sentences(text)
 
         first_chunk_time = None
