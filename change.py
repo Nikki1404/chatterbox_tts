@@ -1,8 +1,5 @@
 FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
-# -----------------------------
-# System deps
-# -----------------------------
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     ffmpeg \
@@ -10,9 +7,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# -----------------------------
-# Python 3.12 install
-# -----------------------------
 RUN add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y \
@@ -27,9 +21,6 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 RUN ln -s /usr/bin/python3.12 /usr/bin/python && \
     ln -s /usr/bin/python3.12 /usr/bin/python3
 
-# -----------------------------
-# Env
-# -----------------------------
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/root/.cache/huggingface
 
