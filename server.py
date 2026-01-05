@@ -3,7 +3,6 @@ import time
 import asyncio
 import base64
 import io
-import psutil
 import re
 import numpy as np
 import soundfile as sf
@@ -28,8 +27,6 @@ _ = model.generate("Warmup.")
 print("Chatterbox ready. SR =", SR)
 
 
-def mem_mb():
-    return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
 
 
 def wav_to_b64(wav, sr):
@@ -103,7 +100,6 @@ async def tts(ws: WebSocket):
                     "latency_sec_total": round(latency, 4),
                     "audio_sec_total": round(audio_sec, 4),
                     "rtf": round(latency / audio_sec, 4),
-                    "ram_mb": round(mem_mb(), 2),
                 },
             })
             return
@@ -154,7 +150,6 @@ async def tts(ws: WebSocket):
                 "latency_sec_total": round(total_latency, 4),
                 "audio_sec_total": round(total_audio_sec, 4),
                 "rtf": round(total_latency / total_audio_sec, 4),
-                "ram_mb": round(mem_mb(), 2),
             },
         })
 
