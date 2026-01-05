@@ -5,32 +5,19 @@ from pathlib import Path
 import jiwer
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ======================================================
-# PATH SETUP (ROBUST & MATCHES YOUR STRUCTURE)
-# ======================================================
 
-# File location: utils/benchmark/run_whisperx_benchmark_parallel.py
 BASE_DIR = Path(__file__).resolve().parents[1]  # utils/
 
 DATA_DIR = BASE_DIR / "datasets" / "data" / "wav"
 RAW_LIBRISPEECH_DIR = BASE_DIR / "datasets" / "data" / "raw" / "LibriSpeech"
 
-# ======================================================
-# ASR CONFIG
-# ======================================================
 
 ASR_ENDPOINT = "http://127.0.0.1:8002/asr/upload_file"
 OUTPUT_CSV = "whisperx_benchmark_results.csv"
 
-# Tune based on machine + uvicorn workers
 MAX_WORKERS = 4  # CPU: 2–4 | GPU: 2–4
 
-# 🔴 NEW: limit benchmarking to first N files
 MAX_FILES = 30
-
-# ======================================================
-# JIWER TRANSFORM (FINAL & CORRECT)
-# ======================================================
 
 transform = jiwer.Compose([
     jiwer.ToLowerCase(),
@@ -40,9 +27,6 @@ transform = jiwer.Compose([
     jiwer.ReduceToListOfListOfWords(word_delimiter=" ")
 ])
 
-# ======================================================
-# LIBRISPEECH REFERENCE LOOKUP (CHAPTER-LEVEL)
-# ======================================================
 
 def get_reference_text(wav_path: Path) -> str:
     """
@@ -75,9 +59,6 @@ def get_reference_text(wav_path: Path) -> str:
 
     return ""
 
-# ======================================================
-# ASR API CALL (ALWAYS EXECUTED)
-# ======================================================
 
 def transcribe_via_api(wav_path: Path):
     """
@@ -110,9 +91,6 @@ def transcribe_via_api(wav_path: Path):
 
     return transcription, latency
 
-# ======================================================
-# SINGLE FILE WORKER (API ALWAYS HIT)
-# ======================================================
 
 def process_single_wav(wav_path: Path):
     """
@@ -146,10 +124,6 @@ def process_single_wav(wav_path: Path):
         round(latency, 2),
         wer,
     ]
-
-# ======================================================
-# MAIN (PARALLEL BENCHMARK)
-# ======================================================
 
 def main():
     if not DATA_DIR.exists():
@@ -191,11 +165,9 @@ def main():
         ])
         writer.writerows(results)
 
-    print("\n✅ Parallel benchmark completed")
-    print(f"📄 Results saved to: {OUTPUT_CSV}")
+    print("\nParallel benchmark completed")
+    print(f"Results saved to: {OUTPUT_CSV}")
     print(f"Total processed files: {len(results)}")
-
-# ======================================================
 
 if __name__ == "__main__":
     main()
