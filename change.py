@@ -1,5 +1,8 @@
 FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
+ENV https_proxy="http://163.116.128.80:8080"
+ENV http_proxy="http://163.116.128.80:8080"
+
 RUN apt-get update && apt-get install -y \
     wget \
     bzip2 \
