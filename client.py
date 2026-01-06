@@ -32,27 +32,32 @@ def decode_wav_from_b64(audio_b64: str):
 # Main
 # -----------------------------
 async def main():
-    clone_input = input("Enable voice cloning? (y/n): ").strip().lower()
-    clone_voice = clone_input == "y"
-
-    ref_audio = None
-    if clone_voice:
-        ref_audio = input("ref_audio_path: ").strip()
-        if not ref_audio:
-            print("Error: voice cloning enabled but no ref_audio_path provided")
-            return
-
-    print("\nMode:", "VOICE CLONING" if clone_voice else "BASE TTS (NO CLONE)")
-    print("• Short text → single-shot")
-    print("• Long text → sentence streaming\n")
+    print("\nChatterbox TTS Client")
+    print("Each request can choose BASE TTS or VOICE CLONING\n")
 
     while True:
+        # ---- Ask cloning per request ----
+        clone_input = input("Use reference voice for this request? (y/n): ").strip().lower()
+        clone_voice = clone_input == "y"
+
+        ref_audio = None
+        if clone_voice:
+            ref_audio = input("ref_audio_path: ").strip()
+            if not ref_audio:
+                print("Error: ref_audio_path required for voice cloning\n")
+                continue
+
+        mode = "VOICE CLONING" if clone_voice else "BASE TTS"
+        print(f"\nMode: {mode}")
+        print("• Short text → single-shot")
+        print("• Long text → sentence streaming\n")
+
         print("Enter text (end with empty line, or 'exit'):")
         lines = []
 
         while True:
             line = input()
-            if line.strip() == "":
+            if not line.strip():
                 break
             lines.append(line)
 
@@ -68,6 +73,7 @@ async def main():
             max_size=200_000_000,
             ping_interval=None,
             ping_timeout=None,
+            proxy=None,  # important in corporate networks
         ) as ws:
 
             await ws.send(json.dumps({
@@ -91,7 +97,7 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print("Saved:", out)
+                    print("\nSaved:", out)
                     print("Metrics:", data["metrics"])
                     break
 
@@ -100,14 +106,17 @@ async def main():
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
                     audio_chunks.append(wav)
 
+                # ---- Done ----
                 if data["type"] == "done":
                     final_wav = np.concatenate(audio_chunks)
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("Saved:", out)
+                    print("\nSaved:", out)
                     print("Metrics:", data["metrics"])
                     break
+
+        print("\n--- Request completed ---\n")
 
 
 asyncio.run(main())
