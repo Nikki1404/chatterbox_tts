@@ -10,9 +10,16 @@ import numpy as np
 import uuid
 from datetime import datetime
 
+
+# -----------------------------
+# SERVER CONFIG
+# -----------------------------
 SERVER = "ws://127.0.0.1:8003/tts"
 
 
+# -----------------------------
+# PATHS
+# -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
@@ -21,6 +28,10 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 VOICES_DIR = os.path.join(PROJECT_ROOT, "voices")
 
+
+# -----------------------------
+# PREDEFINED REFERENCE VOICES
+# -----------------------------
 REFERENCE_VOICES = {
     "1": os.path.join(
         VOICES_DIR,
@@ -28,10 +39,14 @@ REFERENCE_VOICES = {
     ),
     "2": os.path.join(
         VOICES_DIR,
-        "mono_44100_382326__scott-simpson__crossing-the-bar.wavv",
+        "mono_44100_127390__acclivity_the sunisrising.wav",
     ),
 }
 
+
+# -----------------------------
+# HELPERS
+# -----------------------------
 def unique_wav_path(out_dir: str) -> str:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     uid = uuid.uuid4().hex[:6]
@@ -45,8 +60,8 @@ def decode_wav_from_b64(audio_b64: str):
     return wav, sr
 
 
-def select_reference_audio():
-    print("\nSelect reference voice:")
+def select_reference_audio_once():
+    print("\nSelect reference voice (applies to entire session):")
     print("0 → No reference (BASE TTS)")
     for k, v in REFERENCE_VOICES.items():
         print(f"{k} → {os.path.basename(v)}")
@@ -60,33 +75,38 @@ def select_reference_audio():
     if choice in REFERENCE_VOICES:
         ref = REFERENCE_VOICES[choice]
         if not os.path.exists(ref):
-            print(f" Reference file not found:\n{ref}")
-            return False, None
+            raise FileNotFoundError(f"Reference file not found:\n{ref}")
         return True, ref
 
     if choice == "3":
         ref = input("Enter reference audio path: ").strip()
         ref = os.path.normpath(ref)
         if not os.path.exists(ref):
-            print(f" Reference file not found:\n{ref}")
-            return False, None
+            raise FileNotFoundError(f"Reference file not found:\n{ref}")
         return True, ref
 
-    print(" Invalid choice. Using BASE TTS.")
-    return False, None
+    raise ValueError("Invalid reference selection")
 
+
+# -----------------------------
+# MAIN
+# -----------------------------
 async def main():
-    print("\n Chatterbox TTS Client (Realtime Playback)")
-    print("Menu-based reference voice selection enabled\n")
+    print("\n🎙️  Chatterbox TTS Client (Realtime Playback)")
+    print("Reference voice is selected ONCE per session\n")
+
+    try:
+        clone_voice, ref_audio = select_reference_audio_once()
+    except Exception as e:
+        print(f"❌ {e}")
+        return
+
+    mode = "VOICE CLONING" if clone_voice else "BASE TTS"
+    print(f"\nLocked Mode: {mode}")
+    print("• Short text → single-shot")
+    print("• Long text → sentence streaming + realtime audio\n")
 
     while True:
-        clone_voice, ref_audio = select_reference_audio()
-
-        mode = "VOICE CLONING" if clone_voice else "BASE TTS"
-        print(f"\nMode: {mode}")
-        print("• Short text → single-shot")
-        print("• Long text → sentence streaming + realtime audio\n")
-
         print("Enter text (end with empty line, or 'exit'):")
         lines = []
         while True:
@@ -108,7 +128,7 @@ async def main():
             max_size=200_000_000,
             ping_interval=None,
             ping_timeout=None,
-            proxy=None,  # disable corporate proxy issues
+            proxy=None,
         ) as ws:
 
             await ws.send(json.dumps({
@@ -121,24 +141,22 @@ async def main():
                 msg = await ws.recv()
                 data = json.loads(msg)
 
-                # ---- Error ----
                 if data["type"] == "error":
-                    print(" Error:", data["error"])
+                    print("❌ Error:", data["error"])
                     break
 
                 # ---- Single-shot ----
                 if data["type"] == "single":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
 
-                    print(" Playing audio...")
                     sd.play(wav, sr)
                     sd.wait()
 
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print(" Saved:", out)
-                    print(" Metrics:", data["metrics"])
+                    print("💾 Saved:", out)
+                    print("📊 Metrics:", data["metrics"])
                     break
 
                 # ---- Streaming chunk ----
@@ -166,11 +184,11 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("\n Saved:", out)
-                    print(" Metrics:", data["metrics"])
+                    print("💾 Saved:", out)
+                    print("📊 Metrics:", data["metrics"])
                     break
 
-        print("\n--- Request completed ---\n")
+        print("\n--- Ready for next input ---\n")
 
 
 asyncio.run(main())
