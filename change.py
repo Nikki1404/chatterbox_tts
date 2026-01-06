@@ -32,7 +32,7 @@ def decode_wav_from_b64(audio_b64: str):
 
 
 async def main():
-    print("\n🎙️  Chatterbox TTS Client (Realtime Playback)")
+    print("\n  Chatterbox TTS Client (Realtime Playback)")
     print("Each request can choose BASE TTS or VOICE CLONING\n")
 
     while True:
@@ -44,7 +44,7 @@ async def main():
         if clone_voice:
             ref_audio = input("ref_audio_path: ").strip()
             if not ref_audio:
-                print("❌ ref_audio_path required for voice cloning\n")
+                print(" ref_audio_path required for voice cloning\n")
                 continue
 
         mode = "VOICE CLONING" if clone_voice else "BASE TTS"
@@ -88,22 +88,22 @@ async def main():
 
                 # ---- Error ----
                 if data["type"] == "error":
-                    print("❌ Error:", data["error"])
+                    print(" Error:", data["error"])
                     break
 
                 # ---- Single-shot ----
                 if data["type"] == "single":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
 
-                    print("🔊 Playing audio...")
+                    print(" Playing audio...")
                     sd.play(wav, sr)
                     sd.wait()
 
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print("💾 Saved:", out)
-                    print("📊 Metrics:", data["metrics"])
+                    print(" Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
                 # ---- Streaming chunk ----
@@ -133,8 +133,8 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("\n💾 Saved:", out)
-                    print("📊 Metrics:", data["metrics"])
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
         print("\n--- Request completed ---\n")
