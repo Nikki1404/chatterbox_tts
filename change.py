@@ -10,16 +10,9 @@ import numpy as np
 import uuid
 from datetime import datetime
 
-
-# -----------------------------
-# SERVER CONFIG
-# -----------------------------
 SERVER = "ws://127.0.0.1:8003/tts"
 
 
-# -----------------------------
-# PATHS
-# -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
@@ -28,10 +21,6 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 VOICES_DIR = os.path.join(PROJECT_ROOT, "voices")
 
-
-# -----------------------------
-# PREDEFINED REFERENCE VOICES
-# -----------------------------
 REFERENCE_VOICES = {
     "1": os.path.join(
         VOICES_DIR,
@@ -39,14 +28,10 @@ REFERENCE_VOICES = {
     ),
     "2": os.path.join(
         VOICES_DIR,
-        "mono_44100_127390__acclivity_the sunisrising.wav",
+        "mono_44100_382326__scott-simpson__crossing-the-bar.wavv",
     ),
 }
 
-
-# -----------------------------
-# HELPERS
-# -----------------------------
 def unique_wav_path(out_dir: str) -> str:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     uid = uuid.uuid4().hex[:6]
@@ -75,7 +60,7 @@ def select_reference_audio():
     if choice in REFERENCE_VOICES:
         ref = REFERENCE_VOICES[choice]
         if not os.path.exists(ref):
-            print(f"❌ Reference file not found:\n{ref}")
+            print(f" Reference file not found:\n{ref}")
             return False, None
         return True, ref
 
@@ -83,19 +68,15 @@ def select_reference_audio():
         ref = input("Enter reference audio path: ").strip()
         ref = os.path.normpath(ref)
         if not os.path.exists(ref):
-            print(f"❌ Reference file not found:\n{ref}")
+            print(f" Reference file not found:\n{ref}")
             return False, None
         return True, ref
 
-    print("❌ Invalid choice. Using BASE TTS.")
+    print(" Invalid choice. Using BASE TTS.")
     return False, None
 
-
-# -----------------------------
-# MAIN
-# -----------------------------
 async def main():
-    print("\n🎙️  Chatterbox TTS Client (Realtime Playback)")
+    print("\n Chatterbox TTS Client (Realtime Playback)")
     print("Menu-based reference voice selection enabled\n")
 
     while True:
@@ -142,22 +123,22 @@ async def main():
 
                 # ---- Error ----
                 if data["type"] == "error":
-                    print("❌ Error:", data["error"])
+                    print(" Error:", data["error"])
                     break
 
                 # ---- Single-shot ----
                 if data["type"] == "single":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
 
-                    print("🔊 Playing audio...")
+                    print(" Playing audio...")
                     sd.play(wav, sr)
                     sd.wait()
 
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print("💾 Saved:", out)
-                    print("📊 Metrics:", data["metrics"])
+                    print(" Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
                 # ---- Streaming chunk ----
@@ -185,8 +166,8 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("\n💾 Saved:", out)
-                    print("📊 Metrics:", data["metrics"])
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
         print("\n--- Request completed ---\n")
