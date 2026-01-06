@@ -1,3 +1,177 @@
+import asyncio
+import websockets
+import json
+import base64
+import soundfile as sf
+import sounddevice as sd
+import io
+import os
+import numpy as np
+import uuid
+from datetime import datetime
+
+
+SERVER = "ws://127.0.0.1:8003/tts"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUT_DIR, exist_ok=True)
+
+
+def unique_wav_path(out_dir: str) -> str:
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    uid = uuid.uuid4().hex[:6]
+    return os.path.join(out_dir, f"tts_{ts}_{uid}.wav")
+
+
+def decode_wav_from_b64(audio_b64: str):
+    audio_bytes = base64.b64decode(audio_b64)
+    buf = io.BytesIO(audio_bytes)
+    wav, sr = sf.read(buf, dtype="float32")
+    return wav, sr
+
+
+def normalize_path_for_server(path: str) -> str:
+    """
+    IMPORTANT RULE:
+    - Convert ONLY backslashes to forward slashes
+    - NEVER touch existing forward slashes
+    """
+    return path.replace("\\", "/")
+
+
+async def main():
+    print("\n  Chatterbox TTS Client (Realtime Playback)")
+    print("Reference voice is selected ONCE per session\n")
+
+    print("Select reference voice (applies to entire session):")
+    print("0 → No reference (BASE TTS)")
+    print("1 → mono_44100_127389__acclivity__thetimehascome.wav")
+    print("2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav")
+    print("3 → shashank_audio.wav")
+    print("4 → Enter custom reference audio path")
+
+    choice = input("Your choice: ").strip()
+
+    clone_voice = False
+    ref_audio = None
+
+    if choice == "0":
+        clone_voice = False
+
+    elif choice == "1":
+        clone_voice = True
+        ref_audio = "voices/mono_44100_127389__acclivity__thetimehascome.wav"
+
+    elif choice == "2":
+        clone_voice = True
+        ref_audio = "voices/mono_44100_382326__scott-simpson__crossing-the-bar.wav"
+
+    elif choice == "3":
+        clone_voice = True
+        ref_audio = "voices/shashank_audio.wav"
+
+    elif choice == "4":
+        clone_voice = True
+        user_path = input("Enter reference audio path: ").strip()
+        if not user_path:
+            print(" No path provided. Exiting.")
+            return
+        ref_audio = normalize_path_for_server(user_path)
+
+    else:
+        print(" Invalid choice. Exiting.")
+        return
+
+    print("\nLocked Mode:", "VOICE CLONING" if clone_voice else "BASE TTS")
+    print("• Short text → single-shot")
+    print("• Long text → sentence streaming + realtime audio\n")
+
+    while True:
+        print("Enter text (end with empty line, or 'exit'):")
+        lines = []
+
+        while True:
+            line = input()
+            if not line.strip():
+                break
+            lines.append(line)
+
+        text = " ".join(lines).strip()
+        if text.lower() == "exit":
+            print("Exiting client.")
+            break
+
+        audio_chunks = []
+        audio_stream = None
+
+        async with websockets.connect(
+            SERVER,
+            max_size=200_000_000,
+            ping_interval=None,
+            ping_timeout=None,
+            proxy=None,  # IMPORTANT for corp networks
+        ) as ws:
+
+            await ws.send(json.dumps({
+                "text": text,
+                "clone_voice": clone_voice,
+                "ref_audio_path": ref_audio,
+            }))
+
+            while True:
+                msg = await ws.recv()
+                data = json.loads(msg)
+
+                if data["type"] == "error":
+                    print("\n Error:", data["error"])
+                    break
+
+                if data["type"] == "single":
+                    wav, sr = decode_wav_from_b64(data["audio_base64"])
+                    sd.play(wav, sr)
+                    sd.wait()
+
+                    out = unique_wav_path(OUT_DIR)
+                    sf.write(out, wav, sr)
+
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
+                    break
+
+                if data["type"] == "chunk":
+                    wav, sr = decode_wav_from_b64(data["audio_base64"])
+
+                    if audio_stream is None:
+                        audio_stream = sd.OutputStream(
+                            samplerate=sr,
+                            channels=1 if wav.ndim == 1 else wav.shape[1],
+                            dtype="float32",
+                        )
+                        audio_stream.start()
+
+                    audio_stream.write(wav)
+                    audio_chunks.append(wav)
+
+                if data["type"] == "done":
+                    if audio_stream:
+                        audio_stream.stop()
+                        audio_stream.close()
+
+                    final_wav = np.concatenate(audio_chunks)
+                    out = unique_wav_path(OUT_DIR)
+                    sf.write(out, final_wav, sr)
+
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
+                    break
+
+        print("\n--- Ready for next input ---\n")
+
+
+asyncio.run(main())
+
+
 (client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client> python .\client.py
 
   Chatterbox TTS Client (Realtime Playback)
@@ -7,7 +181,39 @@ Select reference voice (applies to entire session):
 0 → No reference (BASE TTS)
 1 → mono_44100_127389__acclivity__thetimehascome.wav
 2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav
-3 → Enter custom reference audio path
+3 → shashank_audio.wav
+4 → Enter custom reference audio path
+Your choice: 3
+
+Locked Mode: VOICE CLONING
+• Short text → single-shot
+• Long text → sentence streaming + realtime audio
+
+Enter text (end with empty line, or 'exit'):
+Hello! This is a test of the text-to-speech system.
+Today is Monday, January 5th, 2026, and the temperature is 24 degrees Celsius.
+Dr. Smith will arrive at 10:30 a.m. for the meeting in Room B-12.
+Please read the following numbers clearly: 42, 3.1416, and 1,000,000.
+The quick brown fox jumps over the lazy dog.
+Can you hear the difference between a question and a statement?
+Thank you for listening, and have a great day!
+
+
+ Error: ref_audio not found: voices/shashank_audio.wav
+
+--- Ready for next input ---
+
+(client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client> python .\client.py
+
+  Chatterbox TTS Client (Realtime Playback)
+Reference voice is selected ONCE per session
+
+Select reference voice (applies to entire session):
+0 → No reference (BASE TTS)
+1 → mono_44100_127389__acclivity__thetimehascome.wav
+2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav
+3 → shashank_audio.wav
+4 → Enter custom reference audio path
 Your choice: 2
 
 Locked Mode: VOICE CLONING
@@ -15,61 +221,13 @@ Locked Mode: VOICE CLONING
 • Long text → sentence streaming + realtime audio
 
 Enter text (end with empty line, or 'exit'):
-hi, Hello there
-
-Traceback (most recent call last):
-  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client.py", line 167, in <module>
-    asyncio.run(main())
-    ~~~~~~~~~~~^^^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\runners.py", line 195, in run
-    return runner.run(main)
-           ~~~~~~~~~~^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\base_events.py", line 725, in run_until_complete
-    return future.result()
-           ~~~~~~~~~~~~~^^
-  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client.py", line 103, in main
-    async with websockets.connect(
-               ~~~~~~~~~~~~~~~~~~^
-        SERVER,
-        ^^^^^^^
-    ...<3 lines>...
-        proxy=None,  # IMPORTANT for corp networks
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ) as ws:
-    ^
-  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client_env\Lib\site-packages\websockets\asyncio\client.py", line 587, in __aenter__
-    return await self
-           ^^^^^^^^^^
-  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client_env\Lib\site-packages\websockets\asyncio\client.py", line 541, in __await_impl__
-    self.connection = await self.create_connection()
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client_env\Lib\site-packages\websockets\asyncio\client.py", line 467, in create_connection
-    _, connection = await loop.create_connection(factory, **kwargs)
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\base_events.py", line 1166, in create_connection
-    raise exceptions[0]
-  File "C:\Program Files\Python313\Lib\asyncio\base_events.py", line 1141, in create_connection
-    sock = await self._connect_sock(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^
-        exceptions, addrinfo, laddr_infos)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\base_events.py", line 1044, in _connect_sock
-    await self.sock_connect(sock, address)
-  File "C:\Program Files\Python313\Lib\asyncio\proactor_events.py", line 726, in sock_connect
-    return await self._proactor.connect(sock, address)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\asyncio\windows_events.py", line 804, in _poll
-    value = callback(transferred, key, ov)
-  File "C:\Program Files\Python313\Lib\asyncio\windows_events.py", line 600, in finish_connect
-    ov.getresult()
-    ~~~~~~~~~~~~^^
-ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection
-(client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client>
+hi hello there
 
 
+ Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-06_19-37-33_d4f0da.wav
+ Metrics: {'mode': 'single', 'clone_voice': True, 'latency_sec_total': 1.9565, 'audio_sec_total': 1.96, 'rtf': 0.9982}
+
+--- Ready for next input ---
 
 
-
+working fine for already available voice but not for new wav file why ?
