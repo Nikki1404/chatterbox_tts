@@ -28,9 +28,6 @@ def decode_wav_from_b64(audio_b64: str):
     return wav, sr
 
 
-# -----------------------------
-# Main
-# -----------------------------
 async def main():
     print("\nChatterbox TTS Client")
     print("Each request can choose BASE TTS or VOICE CLONING\n")
