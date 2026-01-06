@@ -11,13 +11,25 @@ import uuid
 from datetime import datetime
 
 
+# -----------------------------
+# CONFIG
+# -----------------------------
 SERVER = "ws://127.0.0.1:8003/tts"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUT_DIR, exist_ok=True)
 
+# Predefined reference audios (edit these paths)
+REFERENCE_VOICES = {
+    "1": os.path.join(BASE_DIR, "audio", "mono_001.wav"),
+    "2": os.path.join(BASE_DIR, "audio", "mono_002.wav"),
+}
 
+
+# -----------------------------
+# Helpers
+# -----------------------------
 def unique_wav_path(out_dir: str) -> str:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     uid = uuid.uuid4().hex[:6]
@@ -31,21 +43,47 @@ def decode_wav_from_b64(audio_b64: str):
     return wav, sr
 
 
+def select_reference_audio():
+    print("\nSelect reference voice:")
+    print("0 → No reference (BASE TTS)")
+    for k, v in REFERENCE_VOICES.items():
+        print(f"{k} → {os.path.basename(v)}")
+    print("3 → Enter custom reference audio path")
+
+    choice = input("Your choice: ").strip()
+
+    if choice == "0":
+        return False, None
+
+    if choice in REFERENCE_VOICES:
+        ref = REFERENCE_VOICES[choice]
+        if not os.path.exists(ref):
+            print(f"❌ Reference file not found: {ref}")
+            return False, None
+        return True, ref
+
+    if choice == "3":
+        ref = input("Enter reference audio path: ").strip()
+        ref = os.path.normpath(ref)
+        if not os.path.exists(ref):
+            print(f"❌ Reference file not found: {ref}")
+            return False, None
+        return True, ref
+
+    print("❌ Invalid choice. Using BASE TTS.")
+    return False, None
+
+
+# -----------------------------
+# Main
+# -----------------------------
 async def main():
-    print("\n  Chatterbox TTS Client (Realtime Playback)")
-    print("Each request can choose BASE TTS or VOICE CLONING\n")
+    print("\n🎙️  Chatterbox TTS Client (Realtime Playback)")
+    print("Menu-based reference voice selection enabled\n")
 
     while True:
-        # ---- Voice cloning per request ----
-        clone_input = input("Use reference voice for this request? (y/n): ").strip().lower()
-        clone_voice = clone_input == "y"
-
-        ref_audio = None
-        if clone_voice:
-            ref_audio = input("ref_audio_path: ").strip()
-            if not ref_audio:
-                print(" ref_audio_path required for voice cloning\n")
-                continue
+        # ---- Reference selection ----
+        clone_voice, ref_audio = select_reference_audio()
 
         mode = "VOICE CLONING" if clone_voice else "BASE TTS"
         print(f"\nMode: {mode}")
@@ -88,35 +126,33 @@ async def main():
 
                 # ---- Error ----
                 if data["type"] == "error":
-                    print(" Error:", data["error"])
+                    print("❌ Error:", data["error"])
                     break
 
                 # ---- Single-shot ----
                 if data["type"] == "single":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
 
-                    print(" Playing audio...")
+                    print("🔊 Playing audio...")
                     sd.play(wav, sr)
                     sd.wait()
 
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print(" Saved:", out)
-                    print(" Metrics:", data["metrics"])
+                    print("💾 Saved:", out)
+                    print("📊 Metrics:", data["metrics"])
                     break
 
                 # ---- Streaming chunk ----
                 if data["type"] == "chunk":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
 
-                    # Start output stream lazily
                     if audio_stream is None:
                         audio_stream = sd.OutputStream(
                             samplerate=sr,
                             channels=1 if wav.ndim == 1 else wav.shape[1],
                             dtype="float32",
-                            blocksize=0,
                         )
                         audio_stream.start()
 
@@ -133,8 +169,8 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("\n Saved:", out)
-                    print(" Metrics:", data["metrics"])
+                    print("\n💾 Saved:", out)
+                    print("📊 Metrics:", data["metrics"])
                     break
 
         print("\n--- Request completed ---\n")
