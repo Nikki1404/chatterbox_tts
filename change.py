@@ -84,13 +84,13 @@ def select_reference_audio_once():
     raise ValueError("Invalid reference selection")
 
 async def main():
-    print("\n🎙️  Chatterbox TTS Client (Realtime Playback)")
+    print("\n  Chatterbox TTS Client (Realtime Playback)")
     print("Reference voice is selected ONCE per session\n")
 
     try:
         clone_voice, ref_audio = select_reference_audio_once()
     except Exception as e:
-        print(f"❌ {e}")
+        print(f" {e}")
         return
 
     mode = "VOICE CLONING" if clone_voice else "BASE TTS"
@@ -135,7 +135,7 @@ async def main():
                 data = json.loads(msg)
 
                 if data["type"] == "error":
-                    print("❌ Error:", data["error"])
+                    print(" Error:", data["error"])
                     break
 
                 # ---- Single-shot ----
@@ -148,8 +148,8 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print("💾 Saved:", out)
-                    print("📊 Metrics:", data["metrics"])
+                    print(" Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
                 # ---- Streaming chunk ----
@@ -177,8 +177,8 @@ async def main():
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("💾 Saved:", out)
-                    print("📊 Metrics:", data["metrics"])
+                    print(" Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
         print("\n--- Ready for next input ---\n")
