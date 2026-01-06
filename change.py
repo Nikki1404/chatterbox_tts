@@ -1,3 +1,5 @@
+
+C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\voices\mono_44100_127389__acclivity__thetimehascome.wav
 import asyncio
 import websockets
 import json
