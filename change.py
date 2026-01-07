@@ -1,26 +1,4 @@
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav/bu-digital-cx-asr# cd ..
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep 22
-udp   UNCONN 0      0         172.17.255.255:137        0.0.0.0:*    users:(("nmbd",pid=579,fd=22))                                                         
-tcp   LISTEN 0      128              0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=2234707,fd=3))                                                      
-tcp   LISTEN 0      128                 [::]:22            [::]:*    users:(("sshd",pid=2234707,fd=4))                                                      
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep 8000
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep 80
-tcp   LISTEN 0      2048             0.0.0.0:80         0.0.0.0:*    users:(("python",pid=826204,fd=8))                                                     
-tcp   LISTEN 0      4096             0.0.0.0:8003       0.0.0.0:*    users:(("docker-proxy",pid=2406336,fd=7))                                              
-tcp   LISTEN 0      4096             0.0.0.0:8002       0.0.0.0:*    users:(("docker-proxy",pid=1511819,fd=7))                                              
-tcp   LISTEN 0      4096             0.0.0.0:8081       0.0.0.0:*    users:(("docker-proxy",pid=3909396,fd=7))                                              
-tcp   LISTEN 0      4096             0.0.0.0:8080       0.0.0.0:*    users:(("docker-proxy",pid=2190275,fd=7))                                              
-tcp   LISTEN 0      4096                [::]:8003          [::]:*    users:(("docker-proxy",pid=2406342,fd=7))                                              
-tcp   LISTEN 0      4096                [::]:8002          [::]:*    users:(("docker-proxy",pid=1511826,fd=7))                                              
-tcp   LISTEN 0      4096                [::]:8081          [::]:*    users:(("docker-proxy",pid=3909403,fd=7))                                              
-tcp   LISTEN 0      4096                [::]:8080          [::]:*    users:(("docker-proxy",pid=2190283,fd=7))                                              
-tcp   LISTEN 0      128                    *:8089             *:*    users:(("locust",pid=1158202,fd=3))                                                    
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep 88
-udp   UNCONN 0      0                0.0.0.0:57860      0.0.0.0:*    users:(("rsyslogd",pid=588,fd=7))                                                      
-udp   UNCONN 0      0                0.0.0.0:41607      0.0.0.0:*    users:(("rsyslogd",pid=588,fd=9))                                                      
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep 89
-tcp   LISTEN 0      128                    *:8089             *:*    users:(("locust",pid=1158202,fd=3))                                                    
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep 2222
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav# ss -tulpn | grep ssh
-tcp   LISTEN 0      128              0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=2234707,fd=3))                                                      
-tcp   LISTEN 0      128                 [::]:22            [::]:*    users:(("sshd",pid=2234707,fd=4)) 
+aws ssm start-session \
+  --target i-SOURCEINSTANCEID \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["22"],"localPortNumber":["2222"]}'
