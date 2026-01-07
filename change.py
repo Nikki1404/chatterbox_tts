@@ -1,2 +1,4 @@
-wget --no-proxy -r -np -nH --cut-dirs=1 \
-  http://10.90.126.61:9000/inspira_audio/
+curl -X POST "http://127.0.0.1:8002/asr/upload_file" \
+  -H "debug: yes" \
+  -H "diarization: true" \
+  -F "file=@sample.mp4"
