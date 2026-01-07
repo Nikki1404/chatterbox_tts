@@ -5,3 +5,6 @@ re_nikitav@EC03-E01-AICOE1:~$ sudo su
   --parameters '{"portNumber":["22"],"localPortNumber":["2222"]}'
 
 You must specify a region. You can also configure your region by running "aws configure".
+
+curl -s http://169.254.169.254/latest/meta-data/placement/region
+
