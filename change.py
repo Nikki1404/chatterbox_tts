@@ -1,14 +1,5 @@
-re_nikitav@EC03-E01-AICOE1:~$ sudo su
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav#  aws ssm start-session \
+aws ssm start-session \
+  --region ap-south-1 \
   --target i-05a31ee067e1506cb \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["22"],"localPortNumber":["2222"]}'
-
-You must specify a region. You can also configure your region by running "aws configure".
-
-TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-
-curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-  http://169.254.169.254/latest/meta-data/placement/region
-
