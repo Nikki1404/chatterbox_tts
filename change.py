@@ -6,5 +6,9 @@ re_nikitav@EC03-E01-AICOE1:~$ sudo su
 
 You must specify a region. You can also configure your region by running "aws configure".
 
-curl -s http://169.254.169.254/latest/meta-data/placement/region
+TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/region
 
