@@ -46,22 +46,23 @@ import asyncio
 import base64
 import io
 import re
+import hashlib
+from collections import OrderedDict
+
 import numpy as np
 import soundfile as sf
 import torch
-
 from fastapi import FastAPI, WebSocket
 from chatterbox.tts import ChatterboxTTS
 
-
-if torch.cuda.is_available():
-    DEVICE = "cuda"
-else:
-    DEVICE = "cpu"
-
+# -------------------------
+# CONFIG
+# -------------------------
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_num_threads(4)
 
-SHORT_TEXT_CHAR_THRESHOLD = 200  # below this → single-shot
+MAX_CHUNK_CHARS = 160
+MAX_CACHED_VOICES = 16
 
 app = FastAPI()
 
@@ -69,21 +70,61 @@ print(f"Loading Chatterbox on device: {DEVICE}")
 model = ChatterboxTTS.from_pretrained(device=DEVICE)
 SR = model.sr
 
+# Warmup
 _ = model.generate("Warmup.")
 print("Chatterbox ready. Sample rate:", SR)
 
-def wav_to_b64(wav, sr):
+# -------------------------
+# Speaker Embedding Cache (LRU)
+# -------------------------
+speaker_cache = OrderedDict()
+
+def voice_fingerprint(path):
+    stat = os.stat(path)
+    raw = f"{path}|{stat.st_size}|{int(stat.st_mtime)}".encode()
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+def get_speaker_embedding(path):
+    vid = voice_fingerprint(path)
+
+    if vid in speaker_cache:
+        speaker_cache.move_to_end(vid)
+        return vid, speaker_cache[vid]
+
+    print("Extracting speaker embedding:", path)
+    emb = model.extract_speaker_embedding(path)
+
+    if len(speaker_cache) >= MAX_CACHED_VOICES:
+        speaker_cache.popitem(last=False)
+
+    speaker_cache[vid] = emb
+    return vid, emb
+
+# -------------------------
+# Helpers
+# -------------------------
+def wav_to_b64(wav):
     buf = io.BytesIO()
-    sf.write(buf, wav, sr, format="WAV")
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
+    sf.write(buf, wav, SR, format="WAV")
+    return base64.b64encode(buf.getvalue()).decode()
 
-
-def split_into_sentences(text: str):
+def chunk_text(text):
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    return [s for s in sentences if s]
+    chunks = []
 
+    for s in sentences:
+        while len(s) > MAX_CHUNK_CHARS:
+            cut = s[:MAX_CHUNK_CHARS].rsplit(" ", 1)[0]
+            chunks.append(cut)
+            s = s[len(cut):].strip()
+        if s.strip():
+            chunks.append(s.strip())
 
+    return chunks
+
+# -------------------------
+# WebSocket
+# -------------------------
 @app.websocket("/tts")
 async def tts(ws: WebSocket):
     await ws.accept()
@@ -91,7 +132,6 @@ async def tts(ws: WebSocket):
 
     try:
         payload = await ws.receive_json()
-
         text = payload.get("text", "").strip()
         clone_voice = payload.get("clone_voice", False)
         ref_audio = payload.get("ref_audio_path")
@@ -100,97 +140,66 @@ async def tts(ws: WebSocket):
             await ws.send_json({"type": "error", "error": "text is required"})
             return
 
-        # Voice cloning validation
+        speaker_embedding = None
+        voice_id = None
+
         if clone_voice:
-            if not ref_audio:
-                await ws.send_json({
-                    "type": "error",
-                    "error": "clone_voice=true but ref_audio_path not provided"
-                })
+            if not ref_audio or not os.path.exists(ref_audio):
+                await ws.send_json({"type": "error", "error": f"ref_audio not found: {ref_audio}"})
                 return
-            if not os.path.exists(ref_audio):
-                await ws.send_json({
-                    "type": "error",
-                    "error": f"ref_audio not found: {ref_audio}"
-                })
-                return
-        else:
-            ref_audio = None
+            voice_id, speaker_embedding = get_speaker_embedding(ref_audio)
 
-        t0 = time.perf_counter()
+        chunks = chunk_text(text)
 
-        # SHORT TEXT → single-shot
-        if len(text) < SHORT_TEXT_CHAR_THRESHOLD:
+        request_start = time.perf_counter()
+        first_audio_time = None
+        total_model_time = 0
+        total_samples = 0
+
+        for idx, chunk in enumerate(chunks, 1):
+            t0 = time.perf_counter()
+
             wav = await asyncio.to_thread(
                 model.generate,
-                text,
-                audio_prompt_path=ref_audio
+                chunk,
+                speaker_embedding=speaker_embedding
             )
+
+            total_model_time += time.perf_counter() - t0
 
             if isinstance(wav, torch.Tensor):
                 wav = wav.detach().cpu().numpy()
             wav = np.asarray(wav).squeeze()
 
-            latency = time.perf_counter() - t0
-            audio_sec = len(wav) / SR
+            total_samples += len(wav)
 
-            await ws.send_json({
-                "type": "single",
-                "audio_base64": wav_to_b64(wav, SR),
-                "metrics": {
-                    "mode": "single",
-                    "clone_voice": clone_voice,
-                    "latency_sec_total": round(latency, 4),
-                    "audio_sec_total": round(audio_sec, 4),
-                    "rtf": round(latency / audio_sec, 4),
-                },
-            })
-            return
-
-        # LONG TEXT → sentence chunking
-        sentences = split_into_sentences(text)
-
-        first_chunk_time = None
-        total_audio_samples = 0
-
-        for idx, sentence in enumerate(sentences, start=1):
-            wav = await asyncio.to_thread(
-                model.generate,
-                sentence,
-                audio_prompt_path=ref_audio
-            )
-
-            if isinstance(wav, torch.Tensor):
-                wav = wav.detach().cpu().numpy()
-            wav = np.asarray(wav).squeeze()
-
-            if first_chunk_time is None:
-                first_chunk_time = time.perf_counter() - t0
-
-            total_audio_samples += len(wav)
+            if first_audio_time is None:
+                first_audio_time = time.perf_counter()
 
             await ws.send_json({
                 "type": "chunk",
                 "chunk_index": idx,
-                "text": sentence,
-                "audio_base64": wav_to_b64(wav, SR),
+                "text": chunk,
+                "audio_base64": wav_to_b64(wav),
             })
 
             await asyncio.sleep(0)
 
-        total_latency = time.perf_counter() - t0
-        total_audio_sec = total_audio_samples / SR
+        total_latency = time.perf_counter() - request_start
+        audio_sec = total_samples / SR
 
         await ws.send_json({
             "type": "done",
             "metrics": {
-                "mode": "sentence_chunked",
+                "voice_id": voice_id,
                 "clone_voice": clone_voice,
-                "sentences": len(sentences),
-                "ttfa_sec": round(first_chunk_time, 4),
-                "latency_sec_total": round(total_latency, 4),
-                "audio_sec_total": round(total_audio_sec, 4),
-                "rtf": round(total_latency / total_audio_sec, 4),
+                "chunks": len(chunks),
+                "ttfa_ms": round((first_audio_time - request_start) * 1000, 2),
+                "model_ms": round(total_model_time * 1000, 2),
+                "e2e_ms": round(total_latency * 1000, 2),
+                "audio_ms": round(audio_sec * 1000, 2),
+                "rtf": round(total_latency / audio_sec, 3),
+                "cached_voices": len(speaker_cache),
             },
         })
 
@@ -200,4 +209,3 @@ async def tts(ws: WebSocket):
     finally:
         await ws.close()
         print("Client closed")
-
