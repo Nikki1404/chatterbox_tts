@@ -3,6 +3,7 @@ import websockets
 import json
 import base64
 import soundfile as sf
+import sounddevice as sd
 import io
 import os
 import numpy as np
@@ -10,8 +11,10 @@ import uuid
 from datetime import datetime
 
 
-SERVER = "ws://127.0.0.1:8000/tts"
-OUT_DIR = "outputs"
+SERVER = "ws://127.0.0.1:8003/tts"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
@@ -24,31 +27,67 @@ def unique_wav_path(out_dir: str) -> str:
 def decode_wav_from_b64(audio_b64: str):
     audio_bytes = base64.b64decode(audio_b64)
     buf = io.BytesIO(audio_bytes)
-    wav, sr = sf.read(buf)
+    wav, sr = sf.read(buf, dtype="float32")
     return wav, sr
 
 
+def normalize_path_for_server(path: str) -> str:
+    """
+    IMPORTANT RULE:
+    - Convert ONLY backslashes to forward slashes
+    - NEVER touch existing forward slashes
+    """
+    return path.replace("\\", "/")
+
+
 async def main():
-    print("\nChatterbox TTS Client")
-    print("Each request can choose BASE TTS or VOICE CLONING\n")
+    print("\n  Chatterbox TTS Client (Realtime Playback)")
+    print("Reference voice is selected ONCE per session\n")
+
+    print("Select reference voice (applies to entire session):")
+    print("0 → No reference (BASE TTS)")
+    print("1 → mono_44100_127389__acclivity__thetimehascome.wav")
+    print("2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav")
+    print("3 → shashank_audio.wav")
+    print("4 → Enter custom reference audio path")
+
+    choice = input("Your choice: ").strip()
+
+    clone_voice = False
+    ref_audio = None
+
+    if choice == "0":
+        clone_voice = False
+
+    elif choice == "1":
+        clone_voice = True
+        ref_audio = "voices/mono_44100_127389__acclivity__thetimehascome.wav"
+
+    elif choice == "2":
+        clone_voice = True
+        ref_audio = "voices/mono_44100_382326__scott-simpson__crossing-the-bar.wav"
+
+    elif choice == "3":
+        clone_voice = True
+        ref_audio = "voices/shashank_audio.wav"
+
+    elif choice == "4":
+        clone_voice = True
+        user_path = input("Enter reference audio path: ").strip()
+        if not user_path:
+            print(" No path provided. Exiting.")
+            return
+        ref_audio = normalize_path_for_server(user_path)
+
+    else:
+        print(" Invalid choice. Exiting.")
+        return
+
+    print("\nLocked Mode:", "VOICE CLONING" if clone_voice else "BASE TTS")
+    print("• Short text → single-shot")
+    print("• Long text → sentence streaming + realtime audio\n")
 
     while True:
-        # ---- Ask cloning per request ----
-        clone_input = input("Use reference voice for this request? (y/n): ").strip().lower()
-        clone_voice = clone_input == "y"
-
-        ref_audio = None
-        if clone_voice:
-            ref_audio = input("ref_audio_path: ").strip()
-            if not ref_audio:
-                print("Error: ref_audio_path required for voice cloning\n")
-                continue
-
-        mode = "VOICE CLONING" if clone_voice else "BASE TTS"
-        print(f"\nMode: {mode}")
-        print("• Short text → single-shot")
-        print("• Long text → sentence streaming\n")
-
         print("Enter text (end with empty line, or 'exit'):")
         lines = []
 
@@ -64,13 +103,14 @@ async def main():
             break
 
         audio_chunks = []
+        audio_stream = None
 
         async with websockets.connect(
             SERVER,
             max_size=200_000_000,
             ping_interval=None,
             ping_timeout=None,
-            proxy=None,  # important in corporate networks
+            proxy=None,  # IMPORTANT for corp networks
         ) as ws:
 
             await ws.send(json.dumps({
@@ -83,37 +123,50 @@ async def main():
                 msg = await ws.recv()
                 data = json.loads(msg)
 
-                # ---- Error ----
                 if data["type"] == "error":
-                    print("Error:", data["error"])
+                    print("\n Error:", data["error"])
                     break
 
-                # ---- Short text ----
                 if data["type"] == "single":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
+                    sd.play(wav, sr)
+                    sd.wait()
+
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, wav, sr)
 
-                    print("\nSaved:", out)
-                    print("Metrics:", data["metrics"])
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
-                # ---- Sentence chunk ----
                 if data["type"] == "chunk":
                     wav, sr = decode_wav_from_b64(data["audio_base64"])
+
+                    if audio_stream is None:
+                        audio_stream = sd.OutputStream(
+                            samplerate=sr,
+                            channels=1 if wav.ndim == 1 else wav.shape[1],
+                            dtype="float32",
+                        )
+                        audio_stream.start()
+
+                    audio_stream.write(wav)
                     audio_chunks.append(wav)
 
-                # ---- Done ----
                 if data["type"] == "done":
+                    if audio_stream:
+                        audio_stream.stop()
+                        audio_stream.close()
+
                     final_wav = np.concatenate(audio_chunks)
                     out = unique_wav_path(OUT_DIR)
                     sf.write(out, final_wav, sr)
 
-                    print("\nSaved:", out)
-                    print("Metrics:", data["metrics"])
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
                     break
 
-        print("\n--- Request completed ---\n")
+        print("\n--- Ready for next input ---\n")
 
 
 asyncio.run(main())
