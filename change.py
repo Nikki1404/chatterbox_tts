@@ -39,173 +39,46 @@ EXPOSE 8002
 
 CMD ["python", "main.py"]
 
-server.py- 
-import os
-import time
-import asyncio
-import base64
-import io
-import re
-import hashlib
-from collections import OrderedDict
+Sampling:   0%|                                                                                                        | 0/1000 [00:00<?, ?it/s]We detected that you are passing `past_key_values` as a tuple of tuples. This is deprecated and will be removed in v4.47. Please convert your cache or use an appropriate `Cache` class (https://huggingface.co/docs/transformers/kv_cache#legacy-cache-format)
+Sampling:   2%|█▊                                                                                             | 19/1000 [00:02<02:06,  7.77it/s]
+Chatterbox ready. Sample rate: 24000
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
+INFO:     172.17.0.1:33966 - "WebSocket /tts" [accepted]
+Client connected
+INFO:     connection open
+Extracting speaker embedding: voices/shashank_audio.wav
+Server error: 'ChatterboxTTS' object has no attribute 'extract_speaker_embedding'
+Client closed
+INFO:     connection closed
 
-import numpy as np
-import soundfile as sf
-import torch
-from fastapi import FastAPI, WebSocket
-from chatterbox.tts import ChatterboxTTS
 
-# -------------------------
-# CONFIG
-# -------------------------
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-torch.set_num_threads(4)
+Locked Mode: VOICE CLONING
+• Short text → single-shot
+• Long text → sentence streaming + realtime audio
 
-MAX_CHUNK_CHARS = 160
-MAX_CACHED_VOICES = 16
+Enter text (end with empty line, or 'exit'):
+"Today is January 15th, 2026. The temperature is 24.5 degrees Celsius, and the time is 3:45 PM. Testing, one, two, three."
 
-app = FastAPI()
-
-print(f"Loading Chatterbox on device: {DEVICE}")
-model = ChatterboxTTS.from_pretrained(device=DEVICE)
-SR = model.sr
-
-# Warmup
-_ = model.generate("Warmup.")
-print("Chatterbox ready. Sample rate:", SR)
-
-# -------------------------
-# Speaker Embedding Cache (LRU)
-# -------------------------
-speaker_cache = OrderedDict()
-
-def voice_fingerprint(path):
-    stat = os.stat(path)
-    raw = f"{path}|{stat.st_size}|{int(stat.st_mtime)}".encode()
-    return hashlib.sha1(raw).hexdigest()[:12]
-
-def get_speaker_embedding(path):
-    vid = voice_fingerprint(path)
-
-    if vid in speaker_cache:
-        speaker_cache.move_to_end(vid)
-        return vid, speaker_cache[vid]
-
-    print("Extracting speaker embedding:", path)
-    emb = model.extract_speaker_embedding(path)
-
-    if len(speaker_cache) >= MAX_CACHED_VOICES:
-        speaker_cache.popitem(last=False)
-
-    speaker_cache[vid] = emb
-    return vid, emb
-
-# -------------------------
-# Helpers
-# -------------------------
-def wav_to_b64(wav):
-    buf = io.BytesIO()
-    sf.write(buf, wav, SR, format="WAV")
-    return base64.b64encode(buf.getvalue()).decode()
-
-def chunk_text(text):
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    chunks = []
-
-    for s in sentences:
-        while len(s) > MAX_CHUNK_CHARS:
-            cut = s[:MAX_CHUNK_CHARS].rsplit(" ", 1)[0]
-            chunks.append(cut)
-            s = s[len(cut):].strip()
-        if s.strip():
-            chunks.append(s.strip())
-
-    return chunks
-
-# -------------------------
-# WebSocket
-# -------------------------
-@app.websocket("/tts")
-async def tts(ws: WebSocket):
-    await ws.accept()
-    print("Client connected")
-
-    try:
-        payload = await ws.receive_json()
-        text = payload.get("text", "").strip()
-        clone_voice = payload.get("clone_voice", False)
-        ref_audio = payload.get("ref_audio_path")
-
-        if not text:
-            await ws.send_json({"type": "error", "error": "text is required"})
-            return
-
-        speaker_embedding = None
-        voice_id = None
-
-        if clone_voice:
-            if not ref_audio or not os.path.exists(ref_audio):
-                await ws.send_json({"type": "error", "error": f"ref_audio not found: {ref_audio}"})
-                return
-            voice_id, speaker_embedding = get_speaker_embedding(ref_audio)
-
-        chunks = chunk_text(text)
-
-        request_start = time.perf_counter()
-        first_audio_time = None
-        total_model_time = 0
-        total_samples = 0
-
-        for idx, chunk in enumerate(chunks, 1):
-            t0 = time.perf_counter()
-
-            wav = await asyncio.to_thread(
-                model.generate,
-                chunk,
-                speaker_embedding=speaker_embedding
-            )
-
-            total_model_time += time.perf_counter() - t0
-
-            if isinstance(wav, torch.Tensor):
-                wav = wav.detach().cpu().numpy()
-            wav = np.asarray(wav).squeeze()
-
-            total_samples += len(wav)
-
-            if first_audio_time is None:
-                first_audio_time = time.perf_counter()
-
-            await ws.send_json({
-                "type": "chunk",
-                "chunk_index": idx,
-                "text": chunk,
-                "audio_base64": wav_to_b64(wav),
-            })
-
-            await asyncio.sleep(0)
-
-        total_latency = time.perf_counter() - request_start
-        audio_sec = total_samples / SR
-
-        await ws.send_json({
-            "type": "done",
-            "metrics": {
-                "voice_id": voice_id,
-                "clone_voice": clone_voice,
-                "chunks": len(chunks),
-                "ttfa_ms": round((first_audio_time - request_start) * 1000, 2),
-                "model_ms": round(total_model_time * 1000, 2),
-                "e2e_ms": round(total_latency * 1000, 2),
-                "audio_ms": round(audio_sec * 1000, 2),
-                "rtf": round(total_latency / audio_sec, 3),
-                "cached_voices": len(speaker_cache),
-            },
-        })
-
-    except Exception as e:
-        print("Server error:", e)
-
-    finally:
-        await ws.close()
-        print("Client closed")
+Traceback (most recent call last):
+  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client.py", line 172, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "C:\Program Files\Python313\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Program Files\Python313\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Program Files\Python313\Lib\asyncio\base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client.py", line 123, in main
+    msg = await ws.recv()
+          ^^^^^^^^^^^^^^^
+  File "C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\client_env\Lib\site-packages\websockets\asyncio\connection.py", line 322, in recv
+    raise self.protocol.close_exc from self.recv_exc
+websockets.exceptions.ConnectionClosedOK: received 1000 (OK); then sent 1000 (OK)
+(client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client>
