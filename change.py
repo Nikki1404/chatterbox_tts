@@ -39,162 +39,26 @@ EXPOSE 8002
 
 CMD ["python", "main.py"]
 
-import os
-import time
-import asyncio
-import base64
-import io
-import re
-import numpy as np
-import soundfile as sf
-import torch
-from fastapi import FastAPI, WebSocket
-from chatterbox.tts import ChatterboxTTS
+We detected that you are passing `past_key_values` as a tuple of tuples. This is deprecated and will be removed in v4.47. Please convert your cache or use an appropriate `Cache` class (https://huggingface.co/docs/transformers/kv_cache#legacy-cache-format)
+Sampling:   2%|█▋                                                                                             | 18/1000 [00:02<02:03,  7.98it/s]
+Chatterbox ready. Sample rate: 24000
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
+INFO:     172.17.0.1:52056 - "WebSocket /tts" [accepted]
+Client connected
+INFO:     connection open
+WARNING:root:Reference mel length is not equal to 2 * reference token length.
 
-# =====================================================
-# CONFIG
-# =====================================================
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-torch.set_num_threads(4)
-MAX_CHUNK_CHARS = 160
+/usr/lib/python3.10/contextlib.py:103: FutureWarning: `torch.backends.cuda.sdp_kernel()` is deprecated. In the future, this context manager will be removed. Please see `torch.nn.attention.sdpa_kernel()` for the new context manager, with updated signature.
+  self.gen = func(*args, **kwds)
+Sampling:   8%|███████▌                                                                                       | 80/1000 [00:10<01:55,  7.93it/s]
+WARNING:root:Reference mel length is not equal to 2 * reference token length.
 
-# =====================================================
-# APP + MODEL
-# =====================================================
-app = FastAPI()
+Sampling:  19%|█████████████████▍                                                                            | 186/1000 [00:24<01:46,  7.67it/s]
+WARNING:root:Reference mel length is not equal to 2 * reference token length.
 
-print(f"Loading Chatterbox on device: {DEVICE}")
-model = ChatterboxTTS.from_pretrained(device=DEVICE)
-SR = model.sr
-
-# Warmup
-_ = model.generate("Warmup.")
-print("Chatterbox ready. Sample rate:", SR)
-
-# =====================================================
-# SPEAKER PATH CACHE (SUPPORTED)
-# =====================================================
-# We cache *validated* reference paths to avoid repeated FS work
-SPEAKER_PATH_CACHE = set()
-
-def validate_ref_audio(path: str) -> str:
-    """
-    Validate and cache reference audio path.
-    This is the maximum safe caching Chatterbox supports.
-    """
-    if path in SPEAKER_PATH_CACHE:
-        return path
-
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"ref_audio not found: {path}")
-
-    SPEAKER_PATH_CACHE.add(path)
-    return path
-
-# =====================================================
-# HELPERS
-# =====================================================
-def wav_to_b64(wav: np.ndarray) -> str:
-    buf = io.BytesIO()
-    sf.write(buf, wav, SR, format="WAV")
-    return base64.b64encode(buf.getvalue()).decode()
-
-def chunk_text(text: str):
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    chunks = []
-    for s in sentences:
-        while len(s) > MAX_CHUNK_CHARS:
-            cut = s[:MAX_CHUNK_CHARS].rsplit(" ", 1)[0]
-            chunks.append(cut)
-            s = s[len(cut):].strip()
-        if s.strip():
-            chunks.append(s.strip())
-    return chunks
-
-# =====================================================
-# WEBSOCKET
-# =====================================================
-@app.websocket("/tts")
-async def tts(ws: WebSocket):
-    await ws.accept()
-    print("Client connected")
-
-    try:
-        payload = await ws.receive_json()
-
-        text = payload.get("text", "").strip()
-        clone_voice = payload.get("clone_voice", False)
-        ref_audio = payload.get("ref_audio_path")
-
-        if not text:
-            await ws.send_json({"type": "error", "error": "text is required"})
-            return
-
-        if clone_voice:
-            try:
-                ref_audio = validate_ref_audio(ref_audio)
-            except Exception as e:
-                await ws.send_json({"type": "error", "error": str(e)})
-                return
-        else:
-            ref_audio = None
-
-        chunks = chunk_text(text)
-
-        request_start = time.perf_counter()
-        first_audio_time = None
-        total_samples = 0
-        model_time = 0.0
-
-        # ---------------- STREAMING ----------------
-        for idx, chunk in enumerate(chunks, start=1):
-            t0 = time.perf_counter()
-
-            wav = await asyncio.to_thread(
-                model.generate,
-                chunk,
-                audio_prompt_path=ref_audio
-            )
-
-            model_time += time.perf_counter() - t0
-
-            if isinstance(wav, torch.Tensor):
-                wav = wav.detach().cpu().numpy()
-            wav = np.asarray(wav).squeeze()
-
-            total_samples += len(wav)
-
-            if first_audio_time is None:
-                first_audio_time = time.perf_counter()
-
-            await ws.send_json({
-                "type": "chunk",
-                "chunk_index": idx,
-                "audio_base64": wav_to_b64(wav),
-            })
-
-            await asyncio.sleep(0)
-
-        total_latency = time.perf_counter() - request_start
-        audio_sec = total_samples / SR
-
-        await ws.send_json({
-            "type": "done",
-            "metrics": {
-                "clone_voice": clone_voice,
-                "chunks": len(chunks),
-                "ttfa_ms": round((first_audio_time - request_start) * 1000, 2),
-                "model_ms": round(model_time * 1000, 2),
-                "e2e_ms": round(total_latency * 1000, 2),
-                "audio_ms": round(audio_sec * 1000, 2),
-                "rtf": round(total_latency / audio_sec, 3),
-                "cached_reference_voices": len(SPEAKER_PATH_CACHE),
-            },
-        })
-
-    except Exception as e:
-        print("Server error:", e)
-
-    finally:
-        await ws.close()
-        print("Client closed")
+Sampling:   6%|█████▋                                                                                         | 60/1000 [00:07<02:00,  7.82it/s]
+Client closed
+INFO:     connection closed
