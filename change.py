@@ -39,26 +39,6 @@ EXPOSE 8002
 
 CMD ["python", "main.py"]
 
-We detected that you are passing `past_key_values` as a tuple of tuples. This is deprecated and will be removed in v4.47. Please convert your cache or use an appropriate `Cache` class (https://huggingface.co/docs/transformers/kv_cache#legacy-cache-format)
-Sampling:   2%|█▋                                                                                             | 18/1000 [00:02<02:03,  7.98it/s]
-Chatterbox ready. Sample rate: 24000
-INFO:     Started server process [1]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
-INFO:     172.17.0.1:52056 - "WebSocket /tts" [accepted]
-Client connected
-INFO:     connection open
-WARNING:root:Reference mel length is not equal to 2 * reference token length.
-
-/usr/lib/python3.10/contextlib.py:103: FutureWarning: `torch.backends.cuda.sdp_kernel()` is deprecated. In the future, this context manager will be removed. Please see `torch.nn.attention.sdpa_kernel()` for the new context manager, with updated signature.
-  self.gen = func(*args, **kwds)
-Sampling:   8%|███████▌                                                                                       | 80/1000 [00:10<01:55,  7.93it/s]
-WARNING:root:Reference mel length is not equal to 2 * reference token length.
-
-Sampling:  19%|█████████████████▍                                                                            | 186/1000 [00:24<01:46,  7.67it/s]
-WARNING:root:Reference mel length is not equal to 2 * reference token length.
-
-Sampling:   6%|█████▋                                                                                         | 60/1000 [00:07<02:00,  7.82it/s]
-Client closed
-INFO:     connection closed
+Chatterbox is not designed as a streaming or incremental TTS model. Each generate() invocation performs a full inference pass, including reconditioning and diffusion sampling, which makes aggressive chunking increase overall latency.
+Speaker embedding reuse is currently not feasible, as Chatterbox does not expose speaker embeddings or conditioning APIs.
+For short utterances, single-shot synthesis is more efficient, while chunking primarily improves time-to-first-audio for longer responses without reducing total compute cost.
