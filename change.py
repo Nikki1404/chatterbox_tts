@@ -1,106 +1,20 @@
-ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection
-(client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client> python .\client.py
+Limitations & Trade-offs
 
-  Chatterbox TTS Client (Realtime Playback)
-Reference voice is selected ONCE per session
+Voice cloning has a fixed conditioning cost per request, independent of text length.
 
-Select reference voice (applies to entire session):
-0 → No reference (BASE TTS)
-1 → mono_44100_127389__acclivity__thetimehascome.wav
-2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav
-3 → shashank_audio.wav
-4 → Enter custom reference audio path
-Your choice: 3
+Short utterances feel slower because cloning overhead dominates audio duration.
 
-Locked Mode: VOICE CLONING
-• Short text → single-shot
-• Long text → sentence streaming + realtime audio
+Speaker identity is not persistent; conditioning is recomputed on every generation.
 
-Enter text (end with empty line, or 'exit'):
-Hello! This is a test of the text-to-speech system.
-Today is Monday, January 5th, 2026, and the temperature is 24 degrees Celsius.
-Dr. Smith will arrive at 10:30 a.m. for the meeting in Room B-12.
-Please read the following numbers clearly: 42, 3.1416, and 1,000,000.
-The quick brown fox jumps over the lazy dog.
-Can you hear the difference between a question and a statement?
-Thank you for listening, and have a great day!
+The model does not expose speaker embeddings, so true caching is not possible.
 
+Sentence-level splitting increases latency due to repeated conditioning.
 
- Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-16-59_88e9bc.wav
- Metrics: {'mode': 'voice_locked_stream', 'clone_voice': True, 'chunks': 9, 'ttfa_ms': 6650.97, 'model_ms': 27860.69, 'e2e_ms': 28373.59, 'audio_ms': 31580.0, 'rtf': 0.8985}
+Warmup improves stability, not cloning speed.
 
---- Ready for next input ---
+Streaming reduces perceived delay but does not speed up inference.
 
-Enter text (end with empty line, or 'exit'):
-exit
-
-Exiting client.
-(client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client> python .\client.py
-
-  Chatterbox TTS Client (Realtime Playback)
-Reference voice is selected ONCE per session
-
-Select reference voice (applies to entire session):
-0 → No reference (BASE TTS)
-1 → mono_44100_127389__acclivity__thetimehascome.wav
-2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav
-3 → shashank_audio.wav
-4 → Enter custom reference audio path
-Your choice: 3
-
-Locked Mode: VOICE CLONING
-• Short text → single-shot
-• Long text → sentence streaming + realtime audio
-
-Enter text (end with empty line, or 'exit'):
-hi
-
-
- Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-18-26_6ead64.wav
- Metrics: {'mode': 'single', 'clone_voice': True, 'ttfa_ms': 1341.21, 'model_ms': 1071.91, 'e2e_ms': 1341.21, 'audio_ms': 620.0, 'rtf': 2.1632}
-
---- Ready for next input ---
-
-Enter text (end with empty line, or 'exit'):
-how are you ?
-
-
- Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-18-45_8cf7ac.wav
- Metrics: {'mode': 'single', 'clone_voice': True, 'ttfa_ms': 4852.13, 'model_ms': 4578.84, 'e2e_ms': 4852.13, 'audio_ms': 5940.0, 'rtf': 0.8169}
-
---- Ready for next input ---
-
-Enter text (end with empty line, or 'exit'):
-hwat the hell ?
-
-
- Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-18-59_deec0c.wav
- Metrics: {'mode': 'single', 'clone_voice': True, 'ttfa_ms': 1627.19, 'model_ms': 1328.06, 'e2e_ms': 1627.19, 'audio_ms': 1060.0, 'rtf': 1.5351}
-
---- Ready for next input ---
-
-Enter text (end with empty line, or 'exit'):
-this is tts testing for chatterbox via resemble.ai
-
-
- Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-19-35_629194.wav
- Metrics: {'mode': 'single', 'clone_voice': True, 'ttfa_ms': 4155.98, 'model_ms': 3881.27, 'e2e_ms': 4155.98, 'audio_ms': 4940.0, 'rtf': 0.8413}
-
---- Ready for next input ---
-
-Enter text (end with empty line, or 'exit'):
-why taking more time for shorte sentences as well
-
-
- Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-20-01_ab3f60.wav
- Metrics: {'mode': 'single', 'clone_voice': True, 'ttfa_ms': 3351.37, 'model_ms': 3031.71, 'e2e_ms': 3351.37, 'audio_ms': 3660.0, 'rtf': 0.9157}
-
---- Ready for next input ---
-
-Enter text (end with empty line, or 'exit'):
-exit
-
-Exiting client. 
+Voice cloning works best for longer responses, not rapid conversational turns.
 
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
