@@ -4,92 +4,118 @@ import asyncio
 import base64
 import io
 import re
+import logging
+from typing import Optional, List
+
 import numpy as np
 import soundfile as sf
 import torch
-
 from fastapi import FastAPI, WebSocket
 from chatterbox.tts import ChatterboxTTS
 
+# --------------------------------------------------
+# Config
+# --------------------------------------------------
+logging.basicConfig(level=logging.INFO)
 
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_num_threads(4)
-DEVICE = "cpu"  
-SHORT_TEXT_CHAR_THRESHOLD = 200  # below this → single-shot
+
+# Latency tuning knobs
+CHAR_SHORT = 200              # truly short → single shot
+VOICE_LOCK_WORDS = 12         # minimal text to lock speaker
+MODEL_WARMUP_TEXT = "Warmup."
 
 app = FastAPI()
 
-print("Loading Chatterbox...")
+# --------------------------------------------------
+# Model init
+# --------------------------------------------------
+print(f"Loading Chatterbox on device: {DEVICE}")
 model = ChatterboxTTS.from_pretrained(device=DEVICE)
 SR = model.sr
 
-# Warmup
-_ = model.generate("Warmup.")
-print("Chatterbox ready. SR =", SR)
+# Global warmup
+_ = model.generate(MODEL_WARMUP_TEXT)
+print("Chatterbox ready. Sample rate:", SR)
 
-
-
-
-def wav_to_b64(wav, sr):
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+def wav_to_b64(wav: np.ndarray, sr: int) -> str:
     buf = io.BytesIO()
     sf.write(buf, wav, sr, format="WAV")
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
+    return base64.b64encode(buf.read()).decode("utf-8")
 
 
-def split_into_sentences(text: str):
-    # Simple and robust sentence splitter
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [s for s in sentences if s]
+def to_np(wav) -> np.ndarray:
+    if isinstance(wav, torch.Tensor):
+        wav = wav.detach().cpu().numpy()
+    return np.asarray(wav).squeeze().astype(np.float32)
 
 
+def split_sentences(text: str) -> List[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
+
+
+def split_first_words(text: str, n: int):
+    words = text.split()
+    if len(words) <= n:
+        return text, ""
+    return " ".join(words[:n]), " ".join(words[n:])
+
+
+async def generate_async(text: str, ref_audio: Optional[str]):
+    t0 = time.perf_counter()
+    wav = await asyncio.to_thread(model.generate, text, audio_prompt_path=ref_audio)
+    return to_np(wav), time.perf_counter() - t0
+
+
+# --------------------------------------------------
+# WebSocket
+# --------------------------------------------------
 @app.websocket("/tts")
 async def tts(ws: WebSocket):
     await ws.accept()
-    print("Client connected")
+    logging.info("Client connected")
+
+    req_start = time.perf_counter()
+    total_audio_samples = 0
+    total_model_sec = 0.0
+    ttfa_ms = None
 
     try:
         payload = await ws.receive_json()
-
-        text = payload.get("text", "").strip()
-        clone_voice = payload.get("clone_voice", False)
+        text = (payload.get("text") or "").strip()
+        clone_voice = bool(payload.get("clone_voice", False))
         ref_audio = payload.get("ref_audio_path")
 
         if not text:
             await ws.send_json({"type": "error", "error": "text is required"})
             return
 
-        # ---- Voice cloning toggle logic ----
         if clone_voice:
-            if not ref_audio:
-                await ws.send_json({
-                    "type": "error",
-                    "error": "clone_voice=true but ref_audio_path not provided"
-                })
-                return
-            if not os.path.exists(ref_audio):
+            if not ref_audio or not os.path.exists(ref_audio):
                 await ws.send_json({
                     "type": "error",
                     "error": f"ref_audio not found: {ref_audio}"
                 })
                 return
         else:
-            ref_audio = None  # force base TTS
+            ref_audio = None
 
-        t0 = time.perf_counter()
+        # --------------------------------------------------
+        # SHORT TEXT (safe single-shot)
+        # --------------------------------------------------
+        if len(text) <= CHAR_SHORT:
+            wav, model_sec = await generate_async(text, ref_audio)
+            total_model_sec += model_sec
+            total_audio_samples += len(wav)
 
-        if len(text) < SHORT_TEXT_CHAR_THRESHOLD:
-            wav = await asyncio.to_thread(
-                model.generate,
-                text,
-                audio_prompt_path=ref_audio
-            )
-
-            if isinstance(wav, torch.Tensor):
-                wav = wav.detach().cpu().numpy()
-            wav = np.asarray(wav).squeeze()
-
-            latency = time.perf_counter() - t0
-            audio_sec = len(wav) / SR
+            ttfa_ms = (time.perf_counter() - req_start) * 1000
+            audio_ms = (len(wav) / SR) * 1000
+            e2e_ms = (time.perf_counter() - req_start) * 1000
 
             await ws.send_json({
                 "type": "single",
@@ -97,65 +123,81 @@ async def tts(ws: WebSocket):
                 "metrics": {
                     "mode": "single",
                     "clone_voice": clone_voice,
-                    "latency_sec_total": round(latency, 4),
-                    "audio_sec_total": round(audio_sec, 4),
-                    "rtf": round(latency / audio_sec, 4),
-                },
+                    "ttfa_ms": round(ttfa_ms, 2),
+                    "model_ms": round(total_model_sec * 1000, 2),
+                    "e2e_ms": round(e2e_ms, 2),
+                    "audio_ms": round(audio_ms, 2),
+                    "rtf": round((e2e_ms / 1000) / (audio_ms / 1000), 4),
+                }
             })
             return
 
-        # -----------------------------
-        # LONG TEXT → sentence-based chunking
-        # -----------------------------
-        sentences = split_into_sentences(text)
+        # --------------------------------------------------
+        # LONG TEXT — CORRECT LOW-LATENCY STRATEGY
+        # --------------------------------------------------
+        # Phase 1: VOICE LOCK (once)
+        first_text, rest_text = split_first_words(text, VOICE_LOCK_WORDS)
 
-        first_chunk_time = None
-        total_audio_samples = 0
+        wav1, model_sec1 = await generate_async(first_text, ref_audio)
+        total_model_sec += model_sec1
+        total_audio_samples += len(wav1)
 
-        for idx, sentence in enumerate(sentences, start=1):
-            wav = await asyncio.to_thread(
-                model.generate,
-                sentence,
-                audio_prompt_path=ref_audio
-            )
+        ttfa_ms = (time.perf_counter() - req_start) * 1000
 
-            if isinstance(wav, torch.Tensor):
-                wav = wav.detach().cpu().numpy()
-            wav = np.asarray(wav).squeeze()
+        await ws.send_json({
+            "type": "chunk",
+            "chunk_index": 1,
+            "text": first_text,
+            "audio_base64": wav_to_b64(wav1, SR),
+        })
 
-            if first_chunk_time is None:
-                first_chunk_time = time.perf_counter() - t0
+        await asyncio.sleep(0)
 
-            total_audio_samples += len(wav)
+        # Phase 2: CONTINUATION (NO ref_audio)
+        sentences = split_sentences(rest_text)
+        chunk_idx = 2
+
+        for sent in sentences:
+            wav_i, model_seci = await generate_async(sent, None)
+            total_model_sec += model_seci
+            total_audio_samples += len(wav_i)
 
             await ws.send_json({
                 "type": "chunk",
-                "chunk_index": idx,
-                "text": sentence,
-                "audio_base64": wav_to_b64(wav, SR),
+                "chunk_index": chunk_idx,
+                "text": sent,
+                "audio_base64": wav_to_b64(wav_i, SR),
             })
+            chunk_idx += 1
+            await asyncio.sleep(0)
 
-            await asyncio.sleep(0)  # keep WS responsive
-
-        total_latency = time.perf_counter() - t0
-        total_audio_sec = total_audio_samples / SR
+        # Done
+        audio_ms = (total_audio_samples / SR) * 1000
+        e2e_ms = (time.perf_counter() - req_start) * 1000
 
         await ws.send_json({
             "type": "done",
             "metrics": {
-                "mode": "sentence_chunked",
+                "mode": "voice_locked_stream",
                 "clone_voice": clone_voice,
-                "sentences": len(sentences),
-                "ttfa_sec": round(first_chunk_time, 4),
-                "latency_sec_total": round(total_latency, 4),
-                "audio_sec_total": round(total_audio_sec, 4),
-                "rtf": round(total_latency / total_audio_sec, 4),
-            },
+                "chunks": chunk_idx - 1,
+                "ttfa_ms": round(ttfa_ms, 2),
+                "model_ms": round(total_model_sec * 1000, 2),
+                "e2e_ms": round(e2e_ms, 2),
+                "audio_ms": round(audio_ms, 2),
+                "rtf": round((e2e_ms / 1000) / (audio_ms / 1000), 4),
+            }
         })
 
     except Exception as e:
-        print("Server error:", e)
-
+        logging.exception("Server error")
+        try:
+            await ws.send_json({"type": "error", "error": str(e)})
+        except Exception:
+            pass
     finally:
-        await ws.close()
-        print("Client closed")
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        logging.info("Client closed")
