@@ -1,23 +1,3 @@
-(base) root@EC03-E01-AICOE1:/home/CORP/re_nikitav/cx-speech-voice-cloning# docker run -p 8003:8003 -v $(pwd)/voices:/app/voices -v $(pwd)/outputs:/app/outputs chatterbox-tts
-
-==========
-== CUDA ==
-==========
-
-CUDA Version 12.1.0
-
-Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-
-This container image and its contents are governed by the NVIDIA Deep Learning Container License.
-By pulling and using the container, you accept the terms and conditions of this license:
-https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
-
-A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
-
-WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
-   Use the NVIDIA Container Toolkit to start this container with GPU support; see
-   https://docs.nvidia.com/datacenter/cloud-native/ .
-
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
