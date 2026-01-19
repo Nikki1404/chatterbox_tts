@@ -210,7 +210,7 @@ async def tts(ws: WebSocket):
             await asyncio.to_thread(warm_voice_if_needed, ref_audio)
 
         # Decide strategy
-        single_call = should_single_call(text)
+        single_call = should_single_call(text) or clone_voice
 
         # ---- Strategy A: single call (best for 1-sentence / short) ----
         if single_call:
