@@ -1,3 +1,38 @@
+(client_env) PS C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client> python .\client.py
+
+  Chatterbox TTS Client (Realtime Playback)
+Reference voice is selected ONCE per session
+
+Select reference voice (applies to entire session):
+0 → No reference (BASE TTS)
+1 → mono_44100_127389__acclivity__thetimehascome.wav
+2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav
+3 → shashank_audio.wav
+4 → Enter custom reference audio path
+Your choice: 3
+
+Locked Mode: VOICE CLONING
+• Short text → single-shot
+• Long text → sentence streaming + realtime audio
+
+Enter text (end with empty line, or 'exit'):
+Hello! This is a test of the text-to-speech system.
+Today is Monday, January 5th, 2026, and the temperature is 24 degrees Celsius.
+Dr. Smith will arrive at 10:30 a.m. for the meeting in Room B-12.
+Please read the following numbers clearly: 42, 3.1416, and 1,000,000.
+The quick brown fox jumps over the lazy dog.
+Can you hear the difference between a question and a statement?
+Thank you for listening, and have a great day!
+
+
+ Saved: C:\Users\re_nikitav\Desktop\cx-speech-voice-cloning\client\outputs\tts_2026-01-19_11-16-59_88e9bc.wav
+ Metrics: {'mode': 'voice_locked_stream', 'clone_voice': True, 'chunks': 9, 'ttfa_ms': 6650.97, 'model_ms': 27860.69, 'e2e_ms': 28373.59, 'audio_ms': 31580.0, 'rtf': 0.8985}
+
+--- Ready for next input ---
+
+Enter text (end with empty line, or 'exit'):
+exit
+
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
