@@ -1,20 +1,6 @@
-Limitations & Trade-offs
+Chatterbox natively generates PCM audio, and converting that to μ-law is better handled as a lightweight post-processing step (client-side or Lambda) before saving to S3 / feeding into Connect.
 
-Voice cloning has a fixed conditioning cost per request, independent of text length.
-
-Short utterances feel slower because cloning overhead dominates audio duration.
-
-Speaker identity is not persistent; conditioning is recomputed on every generation.
-
-The model does not expose speaker embeddings, so true caching is not possible.
-
-Sentence-level splitting increases latency due to repeated conditioning.
-
-Warmup improves stability, not cloning speed.
-
-Streaming reduces perceived delay but does not speed up inference.
-
-Voice cloning works best for longer responses, not rapid conversational turns.
+For now, we suggest handling μ-law conversion on the client/Lambda side first. If we run into any issues there, we can revisit doing it on the server side later.
 
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
