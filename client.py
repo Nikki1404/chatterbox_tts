@@ -1,172 +1,96 @@
 import asyncio
-import websockets
 import json
-import base64
-import soundfile as sf
-import sounddevice as sd
-import io
-import os
+import time
 import numpy as np
-import uuid
-from datetime import datetime
+import sounddevice as sd
+import websockets
 
+WS_URL = "ws://127.0.0.1:8000/ws"  # change to EC2 public IP if needed
+SR = 16000
+BLOCK_MS = 40
+BLOCK_SAMPLES = int(SR * BLOCK_MS / 1000)
 
-SERVER = "ws://127.0.0.1:8003/tts"
+def rms_db(x: np.ndarray) -> float:
+    rms = float(np.sqrt(np.mean(x * x) + 1e-12))
+    return 20.0 * np.log10(rms + 1e-12)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.join(BASE_DIR, "outputs")
-os.makedirs(OUT_DIR, exist_ok=True)
-
-
-def unique_wav_path(out_dir: str) -> str:
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    uid = uuid.uuid4().hex[:6]
-    return os.path.join(out_dir, f"tts_{ts}_{uid}.wav")
-
-
-def decode_wav_from_b64(audio_b64: str):
-    audio_bytes = base64.b64decode(audio_b64)
-    buf = io.BytesIO(audio_bytes)
-    wav, sr = sf.read(buf, dtype="float32")
-    return wav, sr
-
-
-def normalize_path_for_server(path: str) -> str:
-    """
-    IMPORTANT RULE:
-    - Convert ONLY backslashes to forward slashes
-    - NEVER touch existing forward slashes
-    """
-    return path.replace("\\", "/")
-
-
-async def main():
-    print("\n  Chatterbox TTS Client (Realtime Playback)")
-    print("Reference voice is selected ONCE per session\n")
-
-    print("Select reference voice (applies to entire session):")
-    print("0 → No reference (BASE TTS)")
-    print("1 → mono_44100_127389__acclivity__thetimehascome.wav")
-    print("2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav")
-    print("3 → shashank_audio.wav")
-    print("4 → Enter custom reference audio path")
-
-    choice = input("Your choice: ").strip()
-
-    clone_voice = False
-    ref_audio = None
-
-    if choice == "0":
-        clone_voice = False
-
-    elif choice == "1":
-        clone_voice = True
-        ref_audio = "voices/mono_44100_127389__acclivity__thetimehascome.wav"
-
-    elif choice == "2":
-        clone_voice = True
-        ref_audio = "voices/mono_44100_382326__scott-simpson__crossing-the-bar.wav"
-
-    elif choice == "3":
-        clone_voice = True
-        ref_audio = "voices/shashank_audio.wav"
-
-    elif choice == "4":
-        clone_voice = True
-        user_path = input("Enter reference audio path: ").strip()
-        if not user_path:
-            print(" No path provided. Exiting.")
-            return
-        ref_audio = normalize_path_for_server(user_path)
-
-    else:
-        print(" Invalid choice. Exiting.")
-        return
-
-    print("\nLocked Mode:", "VOICE CLONING" if clone_voice else "BASE TTS")
-    print("• Short text → single-shot")
-    print("• Long text → sentence streaming + realtime audio\n")
-
-    while True:
-        print("Enter text (end with empty line, or 'exit'):")
-        lines = []
-
+async def receiver(ws):
+    try:
         while True:
-            line = input()
-            if not line.strip():
-                break
-            lines.append(line)
+            msg = await ws.recv()
+            obj = json.loads(msg)
 
-        text = " ".join(lines).strip()
-        if text.lower() == "exit":
-            print("Exiting client.")
-            break
+            if obj.get("type") == "partial":
+                print("\r" + obj.get("text", ""), end="", flush=True)
+            elif obj.get("type") == "final":
+                print("\n[FINAL] " + obj.get("text", ""))
+            elif obj.get("type") == "error":
+                print("\n[ERROR] " + obj.get("message", ""))
+    except websockets.exceptions.ConnectionClosed:
+        print("\n[INFO] Connection closed.")
 
-        audio_chunks = []
-        audio_stream = None
+async def run():
+    print("🎙️ Speak now... Ctrl+C to stop")
 
-        async with websockets.connect(
-            SERVER,
-            max_size=200_000_000,
-            ping_interval=None,
-            ping_timeout=None,
-            proxy=None,  # IMPORTANT for corp networks
-        ) as ws:
+    loop = asyncio.get_running_loop()
+    send_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=50)
 
-            await ws.send(json.dumps({
-                "text": text,
-                "clone_voice": clone_voice,
-                "ref_audio_path": ref_audio,
-            }))
+    async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=20) as ws:
+        recv_task = asyncio.create_task(receiver(ws))
 
-            while True:
-                msg = await ws.recv()
-                data = json.loads(msg)
+        async def sender():
+            try:
+                while True:
+                    data = await send_q.get()
+                    await ws.send(data)
+            except asyncio.CancelledError:
+                return
 
-                if data["type"] == "error":
-                    print("\n Error:", data["error"])
-                    break
+        send_task = asyncio.create_task(sender())
 
-                if data["type"] == "single":
-                    wav, sr = decode_wav_from_b64(data["audio_base64"])
-                    sd.play(wav, sr)
-                    sd.wait()
+        last_lvl = 0.0
 
-                    out = unique_wav_path(OUT_DIR)
-                    sf.write(out, wav, sr)
+        def callback(indata, frames, time_info, status):
+            nonlocal last_lvl
+            if status:
+                # status can include underflow/overflow warnings
+                pass
 
-                    print("\n Saved:", out)
-                    print(" Metrics:", data["metrics"])
-                    break
+            mono = indata[:, 0].astype(np.float32)
 
-                if data["type"] == "chunk":
-                    wav, sr = decode_wav_from_b64(data["audio_base64"])
+            now = time.time()
+            if now - last_lvl >= 1.0:
+                last_lvl = now
+                lvl = rms_db(mono)
+                # Print mic level occasionally so you know audio is flowing
+                loop.call_soon_threadsafe(lambda: print(f"\n[MIC] level={lvl:.1f} dB", end=""))
 
-                    if audio_stream is None:
-                        audio_stream = sd.OutputStream(
-                            samplerate=sr,
-                            channels=1 if wav.ndim == 1 else wav.shape[1],
-                            dtype="float32",
-                        )
-                        audio_stream.start()
+            pcm16 = (np.clip(mono, -1.0, 1.0) * 32767.0).astype(np.int16)
+            payload = pcm16.tobytes()
 
-                    audio_stream.write(wav)
-                    audio_chunks.append(wav)
+            # Thread-safe enqueue into asyncio queue
+            def _enqueue():
+                if not send_q.full():
+                    send_q.put_nowait(payload)
+            loop.call_soon_threadsafe(_enqueue)
 
-                if data["type"] == "done":
-                    if audio_stream:
-                        audio_stream.stop()
-                        audio_stream.close()
+        stream = sd.InputStream(
+            samplerate=SR,
+            channels=1,
+            dtype="float32",
+            blocksize=BLOCK_SAMPLES,
+            callback=callback,
+        )
 
-                    final_wav = np.concatenate(audio_chunks)
-                    out = unique_wav_path(OUT_DIR)
-                    sf.write(out, final_wav, sr)
+        try:
+            with stream:
+                while True:
+                    await asyncio.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            recv_task.cancel()
+            send_task.cancel()
 
-                    print("\n Saved:", out)
-                    print(" Metrics:", data["metrics"])
-                    break
-
-        print("\n--- Ready for next input ---\n")
-
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(run())
