@@ -13,9 +13,8 @@ import torch
 from fastapi import FastAPI, WebSocket
 from chatterbox.tts import ChatterboxTTS
 
-# --------------------------------------------------
+
 # Config
-# --------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -28,9 +27,7 @@ MODEL_WARMUP_TEXT = "Warmup."
 
 app = FastAPI()
 
-# --------------------------------------------------
 # Model init
-# --------------------------------------------------
 print(f"Loading Chatterbox on device: {DEVICE}")
 model = ChatterboxTTS.from_pretrained(device=DEVICE)
 SR = model.sr
@@ -39,9 +36,6 @@ SR = model.sr
 _ = model.generate(MODEL_WARMUP_TEXT)
 print("Chatterbox ready. Sample rate:", SR)
 
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
 def wav_to_b64(wav: np.ndarray, sr: int) -> str:
     buf = io.BytesIO()
     sf.write(buf, wav, sr, format="WAV")
@@ -72,9 +66,8 @@ async def generate_async(text: str, ref_audio: Optional[str]):
     return to_np(wav), time.perf_counter() - t0
 
 
-# --------------------------------------------------
+
 # WebSocket
-# --------------------------------------------------
 @app.websocket("/tts")
 async def tts(ws: WebSocket):
     await ws.accept()
@@ -105,9 +98,9 @@ async def tts(ws: WebSocket):
         else:
             ref_audio = None
 
-        # --------------------------------------------------
+
         # SHORT TEXT (safe single-shot)
-        # --------------------------------------------------
+
         if len(text) <= CHAR_SHORT:
             wav, model_sec = await generate_async(text, ref_audio)
             total_model_sec += model_sec
@@ -132,9 +125,7 @@ async def tts(ws: WebSocket):
             })
             return
 
-        # --------------------------------------------------
-        # LONG TEXT — CORRECT LOW-LATENCY STRATEGY
-        # --------------------------------------------------
+
         # Phase 1: VOICE LOCK (once)
         first_text, rest_text = split_first_words(text, VOICE_LOCK_WORDS)
 
