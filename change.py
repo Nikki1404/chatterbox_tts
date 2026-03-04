@@ -1,243 +1,196 @@
-import os
-import time
 import asyncio
+import websockets
+import json
 import base64
-import io
-import re
-import logging
-from typing import Optional, List
-
-import numpy as np
 import soundfile as sf
-import torch
-from fastapi import FastAPI, WebSocket
-from chatterbox.tts import ChatterboxTTS
+import sounddevice as sd
+import os
+import numpy as np
+import uuid
+from datetime import datetime
+
+
+SERVER = "ws://127.0.0.1:8001/tts"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUT_DIR, exist_ok=True)
+
+
+def unique_wav_path(out_dir: str) -> str:
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    uid = uuid.uuid4().hex[:6]
+    return os.path.join(out_dir, f"tts_{ts}_{uid}.wav")
 
 
 # =========================
-# PERFORMANCE CONFIG
+# RAW FLOAT32 DECODER
 # =========================
 
-logging.basicConfig(level=logging.INFO)
+def decode_raw_audio(audio_b64: str, sr: int):
+    audio_bytes = base64.b64decode(audio_b64)
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print("CUDA available:", torch.cuda.is_available())
+    # Reconstruct float32 numpy array
+    wav = np.frombuffer(audio_bytes, dtype=np.float32)
 
-torch.set_num_threads(1)
-
-if DEVICE == "cuda":
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.set_float32_matmul_precision("high")
-
-# =========================
-# LATENCY TUNING
-# =========================
-
-CHAR_SHORT = 200
-VOICE_LOCK_WORDS = 12
-MODEL_WARMUP_TEXT = "This is a warmup run to initialize CUDA kernels."
-
-app = FastAPI()
-
-# =========================
-# MODEL LOAD
-# =========================
-
-print(f"Loading Chatterbox on device: {DEVICE}")
-model = ChatterboxTTS.from_pretrained(device=DEVICE)
-SR = model.sr
-
-# FP16 for base TTS only
-if DEVICE == "cuda":
-    model.model.half()
-
-# Proper warmup (important)
-with torch.inference_mode():
-    _ = model.generate(MODEL_WARMUP_TEXT)
-
-print("Chatterbox ready. Sample rate:", SR)
+    return wav, sr
 
 
-# =========================
-# UTILS
-# =========================
-
-def wav_to_b64_fast(wav: np.ndarray) -> str:
-    # Raw float32 bytes (faster than WAV encoding)
-    return base64.b64encode(wav.tobytes()).decode("utf-8")
+def normalize_path_for_server(path: str) -> str:
+    return path.replace("\\", "/")
 
 
-def to_np(wav) -> np.ndarray:
-    if isinstance(wav, torch.Tensor):
-        wav = wav.detach().cpu().numpy()
-    return np.asarray(wav).squeeze().astype(np.float32)
+async def main():
+    print("\n  Chatterbox TTS Client (Optimized Raw Audio Mode)")
+    print("Reference voice is selected ONCE per session\n")
 
+    print("Select reference voice (applies to entire session):")
+    print("0 → No reference (BASE TTS)")
+    print("1 → mono_44100_127389__acclivity__thetimehascome.wav")
+    print("2 → mono_44100_382326__scott-simpson__crossing-the-bar.wav")
+    print("3 → shashank_audio.wav")
+    print("4 → Enter custom reference audio path")
 
-def split_sentences(text: str) -> List[str]:
-    return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
+    choice = input("Your choice: ").strip()
 
+    clone_voice = False
+    ref_audio = None
 
-def split_first_words(text: str, n: int):
-    words = text.split()
-    if len(words) <= n:
-        return text, ""
-    return " ".join(words[:n]), " ".join(words[n:])
+    if choice == "0":
+        clone_voice = False
 
+    elif choice == "1":
+        clone_voice = True
+        ref_audio = "voices/mono_44100_127389__acclivity__thetimehascome.wav"
 
-async def generate_async(text: str, ref_audio: Optional[str], clone_voice: bool):
-    t0 = time.perf_counter()
+    elif choice == "2":
+        clone_voice = True
+        ref_audio = "voices/mono_44100_382326__scott-simpson__crossing-the-bar.wav"
 
-    with torch.inference_mode():
-        if DEVICE == "cuda":
-            # autocast only for base mode
-            if not clone_voice:
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    wav = await asyncio.to_thread(
-                        model.generate,
-                        text,
-                        audio_prompt_path=ref_audio,
+    elif choice == "3":
+        clone_voice = True
+        ref_audio = "voices/shashank_audio.wav"
+
+    elif choice == "4":
+        clone_voice = True
+        user_path = input("Enter reference audio path: ").strip()
+        if not user_path:
+            print(" No path provided. Exiting.")
+            return
+        ref_audio = normalize_path_for_server(user_path)
+
+    else:
+        print(" Invalid choice. Exiting.")
+        return
+
+    print("\nLocked Mode:", "VOICE CLONING" if clone_voice else "BASE TTS")
+    print("• Base TTS → single-shot ultra-fast")
+    print("• Voice cloning → streaming mode\n")
+
+    while True:
+        print("Enter text (end with empty line, or 'exit'):")
+        lines = []
+
+        while True:
+            line = input()
+            if not line.strip():
+                break
+            lines.append(line)
+
+        text = " ".join(lines).strip()
+
+        if text.lower() == "exit":
+            print("Exiting client.")
+            break
+
+        audio_chunks = []
+        audio_stream = None
+        current_sr = None
+
+        async with websockets.connect(
+            SERVER,
+            max_size=200_000_000,
+            ping_interval=None,
+            ping_timeout=None,
+            proxy=None,
+        ) as ws:
+
+            await ws.send(json.dumps({
+                "text": text,
+                "clone_voice": clone_voice,
+                "ref_audio_path": ref_audio,
+            }))
+
+            while True:
+                msg = await ws.recv()
+                data = json.loads(msg)
+
+                if data["type"] == "error":
+                    print("\n Error:", data["error"])
+                    break
+
+                # =========================
+                # SINGLE MODE (BASE FAST)
+                # =========================
+                if data["type"] == "single":
+                    sr = data["sample_rate"]
+                    wav, sr = decode_raw_audio(
+                        data["audio_base64"],
+                        sr
                     )
-            else:
-                wav = await asyncio.to_thread(
-                    model.generate,
-                    text,
-                    audio_prompt_path=ref_audio,
-                )
-        else:
-            wav = await asyncio.to_thread(
-                model.generate,
-                text,
-                audio_prompt_path=ref_audio,
-            )
 
-    return to_np(wav), time.perf_counter() - t0
+                    sd.play(wav, sr)
+                    sd.wait()
 
+                    out = unique_wav_path(OUT_DIR)
+                    sf.write(out, wav, sr)
 
-# =========================
-# WEBSOCKET
-# =========================
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
+                    break
 
-@app.websocket("/tts")
-async def tts(ws: WebSocket):
-    await ws.accept()
-    logging.info("Client connected")
+                # =========================
+                # STREAM CHUNK
+                # =========================
+                if data["type"] == "chunk":
+                    sr = data["sample_rate"]
+                    wav, sr = decode_raw_audio(
+                        data["audio_base64"],
+                        sr
+                    )
 
-    req_start = time.perf_counter()
-    total_audio_samples = 0
-    total_model_sec = 0.0
-    ttfa_ms = None
+                    if current_sr is None:
+                        current_sr = sr
 
-    try:
-        payload = await ws.receive_json()
-        text = (payload.get("text") or "").strip()
-        clone_voice = bool(payload.get("clone_voice", False))
-        ref_audio = payload.get("ref_audio_path")
+                    if audio_stream is None:
+                        audio_stream = sd.OutputStream(
+                            samplerate=sr,
+                            channels=1,
+                            dtype="float32",
+                        )
+                        audio_stream.start()
 
-        if not text:
-            await ws.send_json({"type": "error", "error": "text is required"})
-            return
+                    audio_stream.write(wav)
+                    audio_chunks.append(wav)
 
-        if clone_voice:
-            if not ref_audio or not os.path.exists(ref_audio):
-                await ws.send_json({
-                    "type": "error",
-                    "error": f"ref_audio not found: {ref_audio}"
-                })
-                return
-        else:
-            ref_audio = None
+                # =========================
+                # DONE STREAM
+                # =========================
+                if data["type"] == "done":
+                    if audio_stream:
+                        audio_stream.stop()
+                        audio_stream.close()
 
+                    final_wav = np.concatenate(audio_chunks)
 
-        # =========================
-        # BASE TTS → ALWAYS SINGLE SHOT (FASTER)
-        # =========================
+                    out = unique_wav_path(OUT_DIR)
+                    sf.write(out, final_wav, current_sr)
 
-        if not clone_voice:
-            wav, model_sec = await generate_async(text, None, False)
+                    print("\n Saved:", out)
+                    print(" Metrics:", data["metrics"])
+                    break
 
-            total_model_sec += model_sec
-            total_audio_samples += len(wav)
-
-            ttfa_ms = (time.perf_counter() - req_start) * 1000
-            audio_ms = (len(wav) / SR) * 1000
-            e2e_ms = (time.perf_counter() - req_start) * 1000
-
-            await ws.send_json({
-                "type": "single",
-                "audio_base64": wav_to_b64_fast(wav),
-                "sample_rate": SR,
-                "metrics": {
-                    "mode": "single_base_fast",
-                    "clone_voice": False,
-                    "ttfa_ms": round(ttfa_ms, 2),
-                    "model_ms": round(total_model_sec * 1000, 2),
-                    "e2e_ms": round(e2e_ms, 2),
-                    "audio_ms": round(audio_ms, 2),
-                    "rtf": round((e2e_ms / 1000) / (audio_ms / 1000), 4),
-                }
-            })
-            return
+        print("\n--- Ready for next input ---\n")
 
 
-        # =========================
-        # VOICE CLONING STREAM MODE
-        # =========================
-
-        first_text, rest_text = split_first_words(text, VOICE_LOCK_WORDS)
-
-        wav1, model_sec1 = await generate_async(first_text, ref_audio, True)
-
-        total_model_sec += model_sec1
-        total_audio_samples += len(wav1)
-
-        ttfa_ms = (time.perf_counter() - req_start) * 1000
-
-        await ws.send_json({
-            "type": "chunk",
-            "audio_base64": wav_to_b64_fast(wav1),
-            "sample_rate": SR,
-        })
-
-        sentences = split_sentences(rest_text)
-
-        for sent in sentences:
-            wav_i, model_seci = await generate_async(sent, None, True)
-
-            total_model_sec += model_seci
-            total_audio_samples += len(wav_i)
-
-            await ws.send_json({
-                "type": "chunk",
-                "audio_base64": wav_to_b64_fast(wav_i),
-                "sample_rate": SR,
-            })
-
-        audio_ms = (total_audio_samples / SR) * 1000
-        e2e_ms = (time.perf_counter() - req_start) * 1000
-
-        await ws.send_json({
-            "type": "done",
-            "metrics": {
-                "mode": "voice_locked_stream",
-                "clone_voice": True,
-                "ttfa_ms": round(ttfa_ms, 2),
-                "model_ms": round(total_model_sec * 1000, 2),
-                "e2e_ms": round(e2e_ms, 2),
-                "audio_ms": round(audio_ms, 2),
-                "rtf": round((e2e_ms / 1000) / (audio_ms / 1000), 4),
-            }
-        })
-
-    except Exception as e:
-        logging.exception("Server error")
-        try:
-            await ws.send_json({"type": "error", "error": str(e)})
-        except Exception:
-            pass
-    finally:
-        try:
-            await ws.close()
-        except Exception:
-            pass
-        logging.info("Client closed")
+asyncio.run(main())
