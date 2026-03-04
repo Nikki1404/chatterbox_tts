@@ -1,46 +1,241 @@
-/usr/local/lib/python3.10/dist-packages/diffusers/models/lora.py:393: FutureWarning: `LoRACompatibleLinear` is deprecated and will be removed in version 1.0.0. Use of `LoRACompatibleLinear` is deprecated. Please switch to PEFT backend by installing PEFT: `pip install peft`.
-  deprecate("LoRACompatibleLinear", "1.0.0", deprecation_message)
-INFO:root:input frame rate=25
-CUDA available: True
-Loading Chatterbox on device: cuda
-loaded PerthNet (Implicit) at step 250,000
-Traceback (most recent call last):
-  File "/usr/local/bin/uvicorn", line 6, in <module>
-    sys.exit(main())
-  File "/usr/local/lib/python3.10/dist-packages/click/core.py", line 1485, in __call__
-    return self.main(*args, **kwargs)
-  File "/usr/local/lib/python3.10/dist-packages/click/core.py", line 1406, in main
-    rv = self.invoke(ctx)
-  File "/usr/local/lib/python3.10/dist-packages/click/core.py", line 1269, in invoke
-    return ctx.invoke(self.callback, **ctx.params)
-  File "/usr/local/lib/python3.10/dist-packages/click/core.py", line 824, in invoke
-    return callback(*args, **kwargs)
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/main.py", line 433, in main
-    run(
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/main.py", line 606, in run
-    server.run()
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/server.py", line 75, in run
-    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/_compat.py", line 60, in asyncio_run
-    return loop.run_until_complete(main)
-  File "/usr/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
-    return future.result()
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/server.py", line 79, in serve
-    await self._serve(sockets)
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/server.py", line 86, in _serve
-    config.load()
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/config.py", line 441, in load
-    self.loaded_app = import_from_string(self.app)
-  File "/usr/local/lib/python3.10/dist-packages/uvicorn/importer.py", line 19, in import_from_string
-    module = importlib.import_module(module_str)
-  File "/usr/lib/python3.10/importlib/__init__.py", line 126, in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
-  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
-  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
-  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
-  File "<frozen importlib._bootstrap_external>", line 883, in exec_module
-  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
-  File "/app/server.py", line 53, in <module>
-    model.model.half()
-AttributeError: 'ChatterboxTTS' object has no attribute 'model'
+import os
+import time
+import asyncio
+import base64
+import re
+import logging
+from typing import Optional, List
+
+import numpy as np
+import torch
+from fastapi import FastAPI, WebSocket
+from chatterbox.tts import ChatterboxTTS
+
+
+# =========================
+# PERFORMANCE SETTINGS
+# =========================
+
+logging.basicConfig(level=logging.INFO)
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print("CUDA available:", torch.cuda.is_available())
+
+torch.set_num_threads(1)
+
+if DEVICE == "cuda":
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
+
+# =========================
+# LATENCY CONFIG
+# =========================
+
+CHAR_SHORT = 200
+VOICE_LOCK_WORDS = 12
+MODEL_WARMUP_TEXT = "This is a warmup run to initialize CUDA kernels."
+
+app = FastAPI()
+
+# =========================
+# MODEL LOAD
+# =========================
+
+print(f"Loading Chatterbox on device: {DEVICE}")
+model = ChatterboxTTS.from_pretrained(device=DEVICE)
+SR = model.sr
+
+# Proper FP16 conversion (FIXED)
+if DEVICE == "cuda":
+    model = model.half()
+
+# Warmup
+with torch.inference_mode():
+    _ = model.generate(MODEL_WARMUP_TEXT)
+
+print("Chatterbox ready. Sample rate:", SR)
+
+
+# =========================
+# UTILS
+# =========================
+
+def wav_to_b64_raw(wav: np.ndarray) -> str:
+    return base64.b64encode(wav.tobytes()).decode("utf-8")
+
+
+def to_np(wav) -> np.ndarray:
+    if isinstance(wav, torch.Tensor):
+        wav = wav.detach().cpu().numpy()
+    return np.asarray(wav).squeeze().astype(np.float32)
+
+
+def split_sentences(text: str) -> List[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
+
+
+def split_first_words(text: str, n: int):
+    words = text.split()
+    if len(words) <= n:
+        return text, ""
+    return " ".join(words[:n]), " ".join(words[n:])
+
+
+async def generate_async(text: str, ref_audio: Optional[str], clone_voice: bool):
+    t0 = time.perf_counter()
+
+    with torch.inference_mode():
+        if DEVICE == "cuda":
+            if not clone_voice:
+                # Base TTS → FP16 autocast
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    wav = await asyncio.to_thread(
+                        model.generate,
+                        text,
+                        audio_prompt_path=ref_audio,
+                    )
+            else:
+                # Voice cloning → safer path
+                wav = await asyncio.to_thread(
+                    model.generate,
+                    text,
+                    audio_prompt_path=ref_audio,
+                )
+        else:
+            wav = await asyncio.to_thread(
+                model.generate,
+                text,
+                audio_prompt_path=ref_audio,
+            )
+
+    return to_np(wav), time.perf_counter() - t0
+
+
+# =========================
+# WEBSOCKET ENDPOINT
+# =========================
+
+@app.websocket("/tts")
+async def tts(ws: WebSocket):
+    await ws.accept()
+    logging.info("Client connected")
+
+    req_start = time.perf_counter()
+    total_audio_samples = 0
+    total_model_sec = 0.0
+    ttfa_ms = None
+
+    try:
+        payload = await ws.receive_json()
+        text = (payload.get("text") or "").strip()
+        clone_voice = bool(payload.get("clone_voice", False))
+        ref_audio = payload.get("ref_audio_path")
+
+        if not text:
+            await ws.send_json({"type": "error", "error": "text is required"})
+            return
+
+        if clone_voice:
+            if not ref_audio or not os.path.exists(ref_audio):
+                await ws.send_json({
+                    "type": "error",
+                    "error": f"ref_audio not found: {ref_audio}"
+                })
+                return
+        else:
+            ref_audio = None
+
+
+        # =========================
+        # BASE MODE (FAST SINGLE SHOT)
+        # =========================
+
+        if not clone_voice:
+            wav, model_sec = await generate_async(text, None, False)
+
+            total_model_sec += model_sec
+            total_audio_samples += len(wav)
+
+            ttfa_ms = (time.perf_counter() - req_start) * 1000
+            audio_ms = (len(wav) / SR) * 1000
+            e2e_ms = (time.perf_counter() - req_start) * 1000
+
+            await ws.send_json({
+                "type": "single",
+                "audio_base64": wav_to_b64_raw(wav),
+                "sample_rate": SR,
+                "metrics": {
+                    "mode": "single_base_fast",
+                    "clone_voice": False,
+                    "ttfa_ms": round(ttfa_ms, 2),
+                    "model_ms": round(total_model_sec * 1000, 2),
+                    "e2e_ms": round(e2e_ms, 2),
+                    "audio_ms": round(audio_ms, 2),
+                    "rtf": round((e2e_ms / 1000) / (audio_ms / 1000), 4),
+                }
+            })
+            return
+
+
+        # =========================
+        # VOICE CLONING STREAM MODE
+        # =========================
+
+        first_text, rest_text = split_first_words(text, VOICE_LOCK_WORDS)
+
+        wav1, model_sec1 = await generate_async(first_text, ref_audio, True)
+
+        total_model_sec += model_sec1
+        total_audio_samples += len(wav1)
+
+        ttfa_ms = (time.perf_counter() - req_start) * 1000
+
+        await ws.send_json({
+            "type": "chunk",
+            "audio_base64": wav_to_b64_raw(wav1),
+            "sample_rate": SR,
+        })
+
+        sentences = split_sentences(rest_text)
+
+        for sent in sentences:
+            wav_i, model_seci = await generate_async(sent, None, True)
+
+            total_model_sec += model_seci
+            total_audio_samples += len(wav_i)
+
+            await ws.send_json({
+                "type": "chunk",
+                "audio_base64": wav_to_b64_raw(wav_i),
+                "sample_rate": SR,
+            })
+
+        audio_ms = (total_audio_samples / SR) * 1000
+        e2e_ms = (time.perf_counter() - req_start) * 1000
+
+        await ws.send_json({
+            "type": "done",
+            "metrics": {
+                "mode": "voice_locked_stream",
+                "clone_voice": True,
+                "ttfa_ms": round(ttfa_ms, 2),
+                "model_ms": round(total_model_sec * 1000, 2),
+                "e2e_ms": round(e2e_ms, 2),
+                "audio_ms": round(audio_ms, 2),
+                "rtf": round((e2e_ms / 1000) / (audio_ms / 1000), 4),
+            }
+        })
+
+    except Exception as e:
+        logging.exception("Server error")
+        try:
+            await ws.send_json({"type": "error", "error": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        logging.info("Client closed")
