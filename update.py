@@ -46,10 +46,6 @@ print(f"Loading Chatterbox on device: {DEVICE}")
 model = ChatterboxTTS.from_pretrained(device=DEVICE)
 SR = model.sr
 
-# Proper FP16 conversion (FIXED)
-if DEVICE == "cuda":
-    model = model.half()
-
 # Warmup
 with torch.inference_mode():
     _ = model.generate(MODEL_WARMUP_TEXT)
@@ -87,16 +83,8 @@ async def generate_async(text: str, ref_audio: Optional[str], clone_voice: bool)
 
     with torch.inference_mode():
         if DEVICE == "cuda":
-            if not clone_voice:
-                # Base TTS → FP16 autocast
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    wav = await asyncio.to_thread(
-                        model.generate,
-                        text,
-                        audio_prompt_path=ref_audio,
-                    )
-            else:
-                # Voice cloning → safer path
+            # autocast safely (without converting model)
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
                 wav = await asyncio.to_thread(
                     model.generate,
                     text,
@@ -148,7 +136,7 @@ async def tts(ws: WebSocket):
 
 
         # =========================
-        # BASE MODE (FAST SINGLE SHOT)
+        # BASE MODE (FAST SINGLE)
         # =========================
 
         if not clone_voice:
@@ -179,7 +167,7 @@ async def tts(ws: WebSocket):
 
 
         # =========================
-        # VOICE CLONING STREAM MODE
+        # VOICE CLONING STREAM
         # =========================
 
         first_text, rest_text = split_first_words(text, VOICE_LOCK_WORDS)
